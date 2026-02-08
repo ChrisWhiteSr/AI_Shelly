@@ -1,0 +1,10 @@
+# AI Shell memory and cache (user-specific, not for repo)
+.cache/ai-shell/
+*.jsonl
+
+# API key (never commit this)
+.config/ai-shell/
+
+# OS junk
+.DS_Store
+Thumbs.db

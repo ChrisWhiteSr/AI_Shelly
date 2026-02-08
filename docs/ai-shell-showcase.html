@@ -1,0 +1,1190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-shell — Natural Language Linux Terminal</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Inter:wght@300;400;500;600;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --surface2: #1a1a28;
+    --border: #2a2a3a;
+    --cyan: #00e5ff;
+    --green: #00e676;
+    --yellow: #ffea00;
+    --red: #ff5252;
+    --purple: #b388ff;
+    --orange: #ff9100;
+    --blue: #448aff;
+    --dim: #555570;
+    --text: #e0e0e8;
+    --text-dim: #8888a0;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+
+  .mono { font-family: 'JetBrains Mono', monospace; }
+
+  /* --- HERO --- */
+  .hero {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 4rem 2rem;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(ellipse at 30% 50%, rgba(0, 229, 255, 0.03) 0%, transparent 50%),
+                radial-gradient(ellipse at 70% 50%, rgba(179, 136, 255, 0.03) 0%, transparent 50%);
+    animation: drift 20s ease-in-out infinite alternate;
+  }
+
+  @keyframes drift {
+    0% { transform: translate(0, 0) rotate(0deg); }
+    100% { transform: translate(-2%, 2%) rotate(1deg); }
+  }
+
+  .hero h1 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: clamp(3rem, 8vw, 6rem);
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    margin-bottom: 0.5rem;
+    position: relative;
+  }
+
+  .hero h1 .prompt { color: var(--green); }
+  .hero h1 .cmd { color: var(--cyan); }
+
+  .hero .subtitle {
+    font-size: 1.25rem;
+    color: var(--text-dim);
+    max-width: 600px;
+    margin-bottom: 3rem;
+    position: relative;
+  }
+
+  .hero .stats {
+    display: flex;
+    gap: 3rem;
+    position: relative;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .stat {
+    text-align: center;
+  }
+
+  .stat .number {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 2.5rem;
+    font-weight: 700;
+    display: block;
+  }
+
+  .stat .label {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  /* --- NARRATIVE SECTION --- */
+  .narrative {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 6rem 2rem;
+  }
+
+  .narrative h2 {
+    font-size: 2rem;
+    margin-bottom: 2rem;
+    color: var(--cyan);
+    font-weight: 600;
+  }
+
+  .narrative p {
+    font-size: 1.1rem;
+    margin-bottom: 1.5rem;
+    color: var(--text);
+    line-height: 1.9;
+  }
+
+  .narrative .highlight {
+    color: var(--cyan);
+    font-weight: 500;
+  }
+
+  .narrative .fact {
+    border-left: 3px solid var(--purple);
+    padding: 1rem 1.5rem;
+    margin: 2rem 0;
+    background: var(--surface);
+    border-radius: 0 8px 8px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.9rem;
+    color: var(--purple);
+  }
+
+  .divider {
+    width: 100%;
+    max-width: 800px;
+    margin: 0 auto;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border), transparent);
+  }
+
+  /* --- TIMELINE --- */
+  .timeline-section {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 6rem 2rem;
+  }
+
+  .timeline-section h2 {
+    font-size: 2rem;
+    margin-bottom: 3rem;
+    color: var(--green);
+    text-align: center;
+  }
+
+  .timeline {
+    position: relative;
+    padding-left: 2rem;
+  }
+
+  .timeline::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: linear-gradient(to bottom, var(--cyan), var(--purple), var(--green), var(--yellow));
+  }
+
+  .timeline-item {
+    position: relative;
+    margin-bottom: 2.5rem;
+    padding-left: 2rem;
+  }
+
+  .timeline-item::before {
+    content: '';
+    position: absolute;
+    left: -2.35rem;
+    top: 0.5rem;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid var(--cyan);
+    background: var(--bg);
+  }
+
+  .timeline-item .time {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--dim);
+    margin-bottom: 0.25rem;
+  }
+
+  .timeline-item .event {
+    font-size: 1rem;
+    color: var(--text);
+  }
+
+  .timeline-item .event code {
+    background: var(--surface2);
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    color: var(--yellow);
+  }
+
+  /* --- ARCHITECTURE --- */
+  .arch-section {
+    padding: 6rem 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  .arch-section h2 {
+    font-size: 2rem;
+    margin-bottom: 3rem;
+    color: var(--yellow);
+    text-align: center;
+  }
+
+  .arch-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem;
+  }
+
+  .arch-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 2rem;
+    transition: border-color 0.3s, transform 0.3s;
+  }
+
+  .arch-card:hover {
+    border-color: var(--cyan);
+    transform: translateY(-4px);
+  }
+
+  .arch-card .icon {
+    font-size: 2rem;
+    margin-bottom: 1rem;
+  }
+
+  .arch-card h3 {
+    font-size: 1.1rem;
+    margin-bottom: 0.75rem;
+    color: var(--text);
+  }
+
+  .arch-card p {
+    font-size: 0.9rem;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+
+  .arch-card .tech {
+    margin-top: 1rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--dim);
+  }
+
+  /* --- TERMINAL DEMO --- */
+  .demo-section {
+    padding: 6rem 2rem;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  .demo-section h2 {
+    font-size: 2rem;
+    margin-bottom: 3rem;
+    color: var(--purple);
+    text-align: center;
+  }
+
+  .terminal {
+    background: #0d0d14;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 2rem;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  }
+
+  .terminal-bar {
+    background: var(--surface2);
+    padding: 0.75rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .terminal-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+  }
+
+  .terminal-dot.red { background: #ff5f57; }
+  .terminal-dot.yellow { background: #febc2e; }
+  .terminal-dot.green { background: #28c840; }
+
+  .terminal-title {
+    flex: 1;
+    text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--dim);
+  }
+
+  .terminal-body {
+    padding: 1.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    line-height: 1.8;
+    min-height: 200px;
+  }
+
+  .terminal-body .prompt-line { color: var(--green); }
+  .terminal-body .output { color: var(--text-dim); }
+  .terminal-body .cyan { color: var(--cyan); }
+  .terminal-body .yellow { color: var(--yellow); }
+  .terminal-body .green { color: var(--green); }
+  .terminal-body .red { color: var(--red); }
+  .terminal-body .purple { color: var(--purple); }
+  .terminal-body .blue { color: var(--blue); }
+  .terminal-body .dim { color: var(--dim); }
+  .terminal-body .orange { color: var(--orange); }
+  .terminal-body .bold { font-weight: 700; }
+
+  .terminal-body .option-row {
+    display: flex;
+    gap: 0.5rem;
+    margin: 0.25rem 0;
+  }
+
+  /* --- FLOW DIAGRAM --- */
+  .flow-section {
+    padding: 6rem 2rem;
+    max-width: 1000px;
+    margin: 0 auto;
+  }
+
+  .flow-section h2 {
+    font-size: 2rem;
+    margin-bottom: 3rem;
+    color: var(--orange);
+    text-align: center;
+  }
+
+  .flow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+  }
+
+  .flow-node {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.25rem 2rem;
+    text-align: center;
+    min-width: 280px;
+    position: relative;
+    transition: border-color 0.3s;
+  }
+
+  .flow-node:hover { border-color: var(--cyan); }
+
+  .flow-node h4 {
+    font-size: 0.95rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .flow-node p {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+
+  .flow-arrow {
+    width: 2px;
+    height: 40px;
+    background: linear-gradient(to bottom, var(--cyan), var(--purple));
+    position: relative;
+  }
+
+  .flow-arrow::after {
+    content: '▼';
+    position: absolute;
+    bottom: -8px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: var(--purple);
+    font-size: 0.7rem;
+  }
+
+  .flow-branch {
+    display: flex;
+    gap: 2rem;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .flow-branch-arrow {
+    width: 80px;
+    height: 2px;
+    background: var(--border);
+    align-self: center;
+  }
+
+  /* --- MEMORY VISUALIZATION --- */
+  .memory-section {
+    padding: 6rem 2rem;
+    max-width: 1000px;
+    margin: 0 auto;
+  }
+
+  .memory-section h2 {
+    font-size: 2rem;
+    margin-bottom: 1rem;
+    color: var(--cyan);
+    text-align: center;
+  }
+
+  .memory-section .sub {
+    text-align: center;
+    color: var(--text-dim);
+    margin-bottom: 3rem;
+  }
+
+  .memory-layers {
+    display: flex;
+    gap: 2rem;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .memory-layer {
+    flex: 1;
+    min-width: 280px;
+    max-width: 450px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .memory-layer-header {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+
+  .memory-layer-body {
+    padding: 1.5rem;
+  }
+
+  .memory-chunk {
+    background: var(--surface2);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.75rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    line-height: 1.5;
+    border-left: 3px solid var(--cyan);
+  }
+
+  .memory-chunk:last-child { margin-bottom: 0; }
+
+  .memory-chunk .ts { color: var(--dim); }
+  .memory-chunk .query { color: var(--green); }
+  .memory-chunk .cmd { color: var(--yellow); }
+
+  /* --- COST SECTION --- */
+  .cost-section {
+    padding: 6rem 2rem;
+    max-width: 800px;
+    margin: 0 auto;
+    text-align: center;
+  }
+
+  .cost-section h2 {
+    font-size: 2rem;
+    margin-bottom: 2rem;
+    color: var(--green);
+  }
+
+  .cost-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+  }
+
+  .cost-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 2rem 1rem;
+  }
+
+  .cost-card .amount {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: var(--green);
+    display: block;
+  }
+
+  .cost-card .per {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+  }
+
+  /* --- COMPARISON TABLE --- */
+  .compare-section {
+    padding: 6rem 2rem;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  .compare-section h2 {
+    font-size: 2rem;
+    margin-bottom: 3rem;
+    color: var(--red);
+    text-align: center;
+  }
+
+  .compare-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+  }
+
+  .compare-table th {
+    text-align: left;
+    padding: 1rem;
+    border-bottom: 2px solid var(--border);
+    color: var(--text-dim);
+    font-weight: 500;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+  }
+
+  .compare-table td {
+    padding: 1rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+
+  .compare-table tr:last-child td { border-bottom: none; }
+
+  .compare-table .feature { color: var(--text); font-weight: 500; }
+  .compare-table .yes { color: var(--green); font-weight: 700; }
+  .compare-table .no { color: var(--red); }
+  .compare-table .partial { color: var(--yellow); }
+
+  /* --- FOOTER --- */
+  .footer {
+    text-align: center;
+    padding: 4rem 2rem;
+    color: var(--dim);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    border-top: 1px solid var(--border);
+    max-width: 800px;
+    margin: 0 auto;
+  }
+
+  .footer .ascii {
+    margin-bottom: 1.5rem;
+    font-size: 0.9rem;
+    line-height: 1.3;
+    color: var(--dim);
+  }
+
+  /* --- ANIMATIONS --- */
+  .fade-in {
+    opacity: 0;
+    transform: translateY(30px);
+    transition: opacity 0.8s ease, transform 0.8s ease;
+  }
+
+  .fade-in.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  .cursor {
+    display: inline-block;
+    width: 8px;
+    height: 1.1em;
+    background: var(--green);
+    animation: blink 1s step-end infinite;
+    vertical-align: text-bottom;
+    margin-left: 2px;
+  }
+
+  @keyframes typeIn {
+    from { width: 0; }
+    to { width: 100%; }
+  }
+
+  /* --- RESPONSIVE --- */
+  @media (max-width: 768px) {
+    .hero h1 { font-size: 2.5rem; }
+    .hero .stats { gap: 1.5rem; }
+    .cost-grid { grid-template-columns: 1fr; }
+    .compare-table { font-size: 0.8rem; }
+    .compare-table th, .compare-table td { padding: 0.5rem; }
+    .flow-branch { flex-direction: column; align-items: center; }
+    .flow-branch-arrow { width: 2px; height: 40px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<section class="hero">
+  <h1><span class="prompt">$</span> <span class="cmd">ai</span></h1>
+  <p class="subtitle">A natural language interface to the Linux kernel. One bash function. Zero dependencies. Infinite power.</p>
+  <div class="stats">
+    <div class="stat">
+      <span class="number" style="color: var(--cyan);">1</span>
+      <span class="label">File</span>
+    </div>
+    <div class="stat">
+      <span class="number" style="color: var(--green);">0</span>
+      <span class="label">Dependencies</span>
+    </div>
+    <div class="stat">
+      <span class="number" style="color: var(--yellow);">$0.0004</span>
+      <span class="label">Per Query</span>
+    </div>
+    <div class="stat">
+      <span class="number" style="color: var(--purple);">∞</span>
+      <span class="label">Memory</span>
+    </div>
+  </div>
+</section>
+
+<!-- NARRATIVE: WHAT -->
+<section class="narrative fade-in">
+  <h2>What It Is</h2>
+  <p>
+    <span class="highlight">ai-shell</span> is a single bash function that turns every terminal on your Linux machine into a natural language interface. You describe what you want in plain English. It returns the exact command, explains it, and runs it. No manual pages. No Stack Overflow. No context switching.
+  </p>
+  <p>
+    It is not a chatbot. It is not a wrapper around a CLI tool. It is a <span class="highlight">direct bridge between human intent and kernel execution</span>, powered by Claude Haiku 4.5 and backed by a persistent memory system that learns from every interaction.
+  </p>
+  <div class="fact">
+    ~/.ai-shell.sh &mdash; 400 lines of bash. curl + jq. That's it.
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- NARRATIVE: WHY -->
+<section class="narrative fade-in">
+  <h2>Why It Matters</h2>
+  <p>
+    The Linux command line is the most powerful interface ever built. It is also the most hostile to newcomers, the most hostile to the forgetful, and the most hostile to anyone who doesn't spend their life memorizing flag combinations for 3,000 different utilities.
+  </p>
+  <p>
+    ai-shell eliminates the gap between <span class="highlight">knowing what you want</span> and <span class="highlight">knowing how to say it</span>. It doesn't dumb down the terminal &mdash; it makes the terminal's full power accessible to anyone who can form a sentence.
+  </p>
+  <p>
+    A sysadmin who has been using Linux for 20 years still googles <code class="mono" style="color: var(--yellow); background: var(--surface2); padding: 0.1rem 0.4rem; border-radius: 4px;">tar</code> flags. ai-shell knows them. It also knows your specific machine, your GPU driver, your filesystem layout, your package manager, and what you asked it three days ago.
+  </p>
+</section>
+
+<div class="divider"></div>
+
+<!-- NARRATIVE: HOW -->
+<section class="narrative fade-in">
+  <h2>How It Works</h2>
+  <p>
+    On first run, ai-shell snapshots your system: kernel version, CPU, GPU, RAM, package manager, init system, boot parameters, user groups. This context is cached daily and injected into every API call. Claude Haiku doesn't give you generic Linux answers &mdash; it gives you answers for <span class="highlight">your machine</span>.
+  </p>
+  <p>
+    Every interaction is logged as a JSON chunk: timestamp, working directory, query, command, explanation, and truncated output. Before each new query, the memory system bundles the last 5 interactions (short-term recall) and keyword-searches the full history for relevant past interactions (long-term recall). The model sees what you've done before and builds on it.
+  </p>
+  <p>
+    If a command fails &mdash; wrong flags, missing tool, permission denied &mdash; ai-shell detects the failure pattern, sends the error back to the model, and auto-corrects. One retry. No human intervention. The <code class="mono" style="color: var(--yellow); background: var(--surface2); padding: 0.1rem 0.4rem; border-radius: 4px;">lsblk -h</code> problem never happens twice.
+  </p>
+  <p>
+    After every run, the tool reads its own source code, reviews recent usage patterns, and suggests one concrete improvement to itself. It is a tool that evolves by observing how you use it.
+  </p>
+</section>
+
+<div class="divider"></div>
+
+<!-- TERMINAL DEMOS -->
+<section class="demo-section fade-in">
+  <h2>In Action</h2>
+
+  <!-- Demo 1: Basic usage -->
+  <div class="terminal">
+    <div class="terminal-bar">
+      <div class="terminal-dot red"></div>
+      <div class="terminal-dot yellow"></div>
+      <div class="terminal-dot green"></div>
+      <div class="terminal-title">varmint@pop-os: ~</div>
+    </div>
+    <div class="terminal-body">
+      <div class="prompt-line">$ ai show me whats eating my ram</div>
+      <br>
+      <div class="cyan">→ Shows processes sorted by memory usage so you can identify the biggest consumers.</div>
+      <br>
+      <div>  <span class="green bold">[1]</span> <span class="green">Top memory hogs</span></div>
+      <div>  &nbsp;&nbsp;&nbsp;&nbsp;<span class="yellow">$ ps aux --sort=-%mem | head -15</span></div>
+      <div>  <span class="blue bold">[2]</span> <span class="blue">Memory map summary</span></div>
+      <div>  &nbsp;&nbsp;&nbsp;&nbsp;<span class="yellow">$ smem -t -k -s rss | tail -15</span></div>
+      <div>  <span class="purple bold">[3]</span> <span class="purple">Live monitoring</span></div>
+      <div>  &nbsp;&nbsp;&nbsp;&nbsp;<span class="yellow">$ watch -n 1 free -h</span></div>
+      <br>
+      <div class="output">Pick [1/2/3] or q to cancel: <span class="green">1</span></div>
+      <br>
+      <div class="yellow">  $ ps aux --sort=-%mem | head -15</div>
+      <br>
+      <div class="output">USER  PID  %CPU  %MEM    VSZ   RSS  COMMAND</div>
+      <div class="output">varmint 2841  3.2  12.4  4892148 2048312  chrome</div>
+      <div class="output">varmint 1923  1.1   8.7  3241024 1432108  code</div>
+      <div class="output">varmint 3102  0.4   4.2  1847296  692440  discord</div>
+      <br>
+      <div class="green">✦ The ps command has existed since 1971 in AT&T Unix — it's been watching processes for over 50 years.</div>
+      <div class="red">🐧 "We all know Linux is great... it does infinite loops in 5 seconds." — Linus Torvalds</div>
+      <br>
+      <div class="dim">   ( •_•)<br>   ( •_•)>⌐■-■<br>   (⌐■_■)  deal with it</div>
+      <br>
+      <div class="orange">💡 Self-improvement: Add a --fast flag that skips fun facts and ASCII art for rapid-fire usage when the user is doing multiple queries in sequence.</div>
+      <div class="orange">   Reason: Memory shows bursts of 3-4 queries in a row — speed matters in these sessions.</div>
+    </div>
+  </div>
+
+  <!-- Demo 2: Pipe mode -->
+  <div class="terminal">
+    <div class="terminal-bar">
+      <div class="terminal-dot red"></div>
+      <div class="terminal-dot yellow"></div>
+      <div class="terminal-dot green"></div>
+      <div class="terminal-title">varmint@pop-os: ~ — pipe mode</div>
+    </div>
+    <div class="terminal-body">
+      <div class="prompt-line">$ dmesg | ai find anything alarming</div>
+      <br>
+      <div class="cyan">→ Analyzing your kernel ring buffer for errors, warnings, and hardware issues.</div>
+      <br>
+      <div>  <span class="green bold">[1]</span> <span class="green">Filter critical errors</span></div>
+      <div>  &nbsp;&nbsp;&nbsp;&nbsp;<span class="yellow">$ dmesg --level=err,crit,alert,emerg</span></div>
+      <div>  <span class="blue bold">[2]</span> <span class="blue">Hardware errors only</span></div>
+      <div>  &nbsp;&nbsp;&nbsp;&nbsp;<span class="yellow">$ dmesg | grep -iE 'error|fail|warn|bug' | tail -20</span></div>
+      <div>  <span class="purple bold">[3]</span> <span class="purple">GPU-specific issues</span></div>
+      <div>  &nbsp;&nbsp;&nbsp;&nbsp;<span class="yellow">$ dmesg | grep -i nvidia | grep -iE 'error|fail'</span></div>
+    </div>
+  </div>
+
+  <!-- Demo 3: Self-correction -->
+  <div class="terminal">
+    <div class="terminal-bar">
+      <div class="terminal-dot red"></div>
+      <div class="terminal-dot yellow"></div>
+      <div class="terminal-dot green"></div>
+      <div class="terminal-title">varmint@pop-os: ~ — self-correction</div>
+    </div>
+    <div class="terminal-body">
+      <div class="prompt-line">$ ai how big is this hard drive</div>
+      <br>
+      <div class="yellow">  $ lsblk -h</div>
+      <br>
+      <div class="output">Usage: lsblk [options] [&lt;device&gt; ...]<br>...(help text)...</div>
+      <br>
+      <div class="red">✗ Detected failure: Got help/usage text instead of actual output</div>
+      <br>
+      <div class="dim">Self-correcting...</div>
+      <div class="cyan">→ Retry: The -h flag shows help, not human-readable sizes. Using lsblk without flags.</div>
+      <div class="yellow">  $ lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT</div>
+      <br>
+      <div class="output">Run corrected command? [Y/n]: <span class="green">y</span></div>
+      <br>
+      <div class="output">NAME        SIZE TYPE FSTYPE  MOUNTPOINT</div>
+      <div class="output">nvme0n1   931.5G disk</div>
+      <div class="output">├─nvme0n1p1  512M part vfat   /boot/efi</div>
+      <div class="output">├─nvme0n1p2    4G part swap   [SWAP]</div>
+      <div class="output">└─nvme0n1p3  927G part ext4   /</div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ARCHITECTURE FLOW -->
+<section class="flow-section fade-in">
+  <h2>Execution Flow</h2>
+  <div class="flow">
+    <div class="flow-node" style="border-color: var(--green);">
+      <h4 style="color: var(--green);">User Input</h4>
+      <p>ai show me disk space &nbsp;|&nbsp; ask &nbsp;|&nbsp; cmd | ai question</p>
+    </div>
+    <div class="flow-arrow"></div>
+    <div class="flow-node" style="border-color: var(--cyan);">
+      <h4 style="color: var(--cyan);">Context Assembly</h4>
+      <p>System snapshot + memory bundle + piped stdin</p>
+    </div>
+    <div class="flow-arrow"></div>
+    <div class="flow-node" style="border-color: var(--purple);">
+      <h4 style="color: var(--purple);">Claude Haiku 4.5</h4>
+      <p>Returns 3 options + explanation + fun fact + Linus quote</p>
+    </div>
+    <div class="flow-arrow"></div>
+    <div class="flow-node" style="border-color: var(--yellow);">
+      <h4 style="color: var(--yellow);">User Picks [1/2/3]</h4>
+      <p>Command executes in current shell context</p>
+    </div>
+    <div class="flow-arrow"></div>
+    <div class="flow-branch">
+      <div class="flow-node" style="border-color: var(--green); min-width: 200px;">
+        <h4 style="color: var(--green);">Success</h4>
+        <p>Log to memory</p>
+      </div>
+      <div class="flow-branch-arrow"></div>
+      <div class="flow-node" style="border-color: var(--red); min-width: 200px;">
+        <h4 style="color: var(--red);">Failure Detected</h4>
+        <p>Auto-retry with error context</p>
+      </div>
+    </div>
+    <div class="flow-arrow"></div>
+    <div class="flow-node" style="border-color: var(--orange);">
+      <h4 style="color: var(--orange);">Self-Improvement</h4>
+      <p>Reads own source + memory → suggests one optimization</p>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- MEMORY VISUALIZATION -->
+<section class="memory-section fade-in">
+  <h2>Memory Architecture</h2>
+  <p class="sub">Chunk &amp; bundle pattern — inspired by AllProjectWeapons</p>
+
+  <div class="memory-layers">
+    <div class="memory-layer">
+      <div class="memory-layer-header" style="color: var(--cyan);">
+        Layer 1: Short-Term (Rolling)
+      </div>
+      <div class="memory-layer-body">
+        <div class="memory-chunk">
+          <div class="ts">01:03:01</div>
+          <div class="query">Q: so run it with nmap</div>
+          <div class="cmd">$ nmap -sn 10.0.0.0/24 | grep 'Nmap scan report'</div>
+        </div>
+        <div class="memory-chunk">
+          <div class="ts">01:11:18</div>
+          <div class="query">Q: how big is this harddrive</div>
+          <div class="cmd">$ lsblk -h</div>
+        </div>
+        <div class="memory-chunk">
+          <div class="ts">01:15:03</div>
+          <div class="query">Q: list all flatpack apps</div>
+          <div class="cmd">$ flatpak list --app</div>
+        </div>
+        <div class="memory-chunk">
+          <div class="ts">01:16:51</div>
+          <div class="query">Q: delete all flatpack apps except VSC</div>
+          <div class="cmd">$ flatpak list --app | awk ... | xargs flatpak uninstall</div>
+        </div>
+        <div class="memory-chunk">
+          <div class="ts">01:17:53</div>
+          <div class="query">Q: now install the native apps</div>
+          <div class="cmd">$ sudo apt search discord && sudo apt search chromium</div>
+        </div>
+        <p style="color: var(--dim); font-size: 0.75rem; margin-top: 1rem; text-align: center;">Last 5 interactions — auto-bundled into every prompt</p>
+      </div>
+    </div>
+
+    <div class="memory-layer">
+      <div class="memory-layer-header" style="color: var(--purple);">
+        Layer 2: Long-Term (Keyword Recall)
+      </div>
+      <div class="memory-layer-body">
+        <p style="color: var(--text-dim); font-size: 0.85rem; margin-bottom: 1rem;">When you ask about "network devices", the system searches all chunks for keyword matches:</p>
+        <div class="memory-chunk" style="border-left-color: var(--purple);">
+          <div class="ts">Score: 3 keywords matched</div>
+          <div class="query">Q: show me IP addresses on my subnet</div>
+          <div class="cmd">$ arp -n | awk '/^[0-9]/ {print $1}'</div>
+        </div>
+        <div class="memory-chunk" style="border-left-color: var(--purple);">
+          <div class="ts">Score: 2 keywords matched</div>
+          <div class="query">Q: so run it with nmap</div>
+          <div class="cmd">$ nmap -sn 10.0.0.0/24</div>
+        </div>
+        <p style="color: var(--dim); font-size: 0.75rem; margin-top: 1rem; text-align: center;">Full history searched — top matches bundled into prompt</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- FEATURE ARCHITECTURE -->
+<section class="arch-section fade-in">
+  <h2>Feature Architecture</h2>
+  <div class="arch-grid">
+    <div class="arch-card">
+      <div class="icon">🧠</div>
+      <h3>System Awareness</h3>
+      <p>Snapshots your kernel, CPU, GPU, RAM, package manager, init system, and boot parameters. Cached daily. Every answer is tailored to your exact machine.</p>
+      <div class="tech">~/.cache/ai-shell/system-context.txt</div>
+    </div>
+    <div class="arch-card">
+      <div class="icon">💾</div>
+      <h3>Chunk &amp; Bundle Memory</h3>
+      <p>Every interaction logged as JSONL. Short-term rolling context (last 5) plus keyword-scored long-term recall. The model remembers what you did last week.</p>
+      <div class="tech">~/.cache/ai-shell/memory/chunks.jsonl</div>
+    </div>
+    <div class="arch-card">
+      <div class="icon">🔁</div>
+      <h3>Self-Correction</h3>
+      <p>Detects failed commands (bad exit codes, help text, permission denied). Feeds the error back to the model and auto-retries with a corrected command.</p>
+      <div class="tech">_ai_detect_failure() + _ai_retry()</div>
+    </div>
+    <div class="arch-card">
+      <div class="icon">🪞</div>
+      <h3>Self-Improvement</h3>
+      <p>After every run, reads its own source code and recent memory. Analyzes usage patterns and suggests one concrete improvement to itself per invocation.</p>
+      <div class="tech">_ai_self_improve() → reads ~/.ai-shell.sh</div>
+    </div>
+    <div class="arch-card">
+      <div class="icon">🔀</div>
+      <h3>Pipe Mode</h3>
+      <p>Pipe any command output into ai for analysis. <code>dmesg | ai find errors</code>. Stdin is detected automatically and included as context for the model.</p>
+      <div class="tech">[ ! -t 0 ] → stdin detection</div>
+    </div>
+    <div class="arch-card">
+      <div class="icon">🎯</div>
+      <h3>3-Option Selection</h3>
+      <p>Every query returns three approaches ranked by recommendation. User picks [1], [2], or [3]. Different strategies for different comfort levels.</p>
+      <div class="tech">options[0..2].command + options[0..2].label</div>
+    </div>
+    <div class="arch-card">
+      <div class="icon">🐧</div>
+      <h3>Personality Layer</h3>
+      <p>Fun facts, Linus Torvalds quotes, random ASCII art, and an optional roast mode that verbally destroys you for needing AI help. Toggleable.</p>
+      <div class="tech">export AI_ROAST=1</div>
+    </div>
+    <div class="arch-card">
+      <div class="icon">🛡️</div>
+      <h3>Safe by Default</h3>
+      <p>Warns before destructive operations. Shows commands before running. User confirms selection. API key stored with chmod 600. No data leaves the machine except the query.</p>
+      <div class="tech">chmod 600 ~/.config/ai-shell/api-key</div>
+    </div>
+    <div class="arch-card">
+      <div class="icon">⌨️</div>
+      <h3>Interactive Mode</h3>
+      <p>Type <code>ask</code> for a raw input prompt that handles apostrophes, backticks, and special characters that would break normal shell parsing.</p>
+      <div class="tech">ask() → read -r → tr -d sanitization</div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- COST -->
+<section class="cost-section fade-in">
+  <h2>Economics</h2>
+  <div class="cost-grid">
+    <div class="cost-card">
+      <span class="amount">$0.0004</span>
+      <span class="per">per query</span>
+    </div>
+    <div class="cost-card">
+      <span class="amount">$0.40</span>
+      <span class="per">per 1,000 queries</span>
+    </div>
+    <div class="cost-card">
+      <span class="amount">$4.80</span>
+      <span class="per">per year (1k/month)</span>
+    </div>
+  </div>
+  <p style="color: var(--text-dim);">Claude Haiku 4.5 — $0.80/M input tokens, $4.00/M output tokens.<br>Average query: ~400 tokens in, ~200 tokens out. Self-improvement adds ~300 tokens.</p>
+</section>
+
+<div class="divider"></div>
+
+<!-- COMPARISON -->
+<section class="compare-section fade-in">
+  <h2>How It Compares</h2>
+  <table class="compare-table">
+    <thead>
+      <tr>
+        <th>Feature</th>
+        <th>ai-shell</th>
+        <th>GitHub Copilot CLI</th>
+        <th>ChatGPT</th>
+        <th>man pages</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="feature">Knows your exact system</td>
+        <td class="yes">Yes</td>
+        <td class="no">No</td>
+        <td class="no">No</td>
+        <td class="no">No</td>
+      </tr>
+      <tr>
+        <td class="feature">Remembers past interactions</td>
+        <td class="yes">Yes</td>
+        <td class="no">No</td>
+        <td class="partial">Session only</td>
+        <td class="no">No</td>
+      </tr>
+      <tr>
+        <td class="feature">Self-corrects on failure</td>
+        <td class="yes">Yes</td>
+        <td class="no">No</td>
+        <td class="no">No</td>
+        <td class="no">No</td>
+      </tr>
+      <tr>
+        <td class="feature">Self-improves</td>
+        <td class="yes">Yes</td>
+        <td class="no">No</td>
+        <td class="no">No</td>
+        <td class="no">No</td>
+      </tr>
+      <tr>
+        <td class="feature">Pipe support</td>
+        <td class="yes">Yes</td>
+        <td class="no">No</td>
+        <td class="no">No</td>
+        <td class="no">No</td>
+      </tr>
+      <tr>
+        <td class="feature">Runs in terminal</td>
+        <td class="yes">Native</td>
+        <td class="yes">Native</td>
+        <td class="no">Browser</td>
+        <td class="yes">Native</td>
+      </tr>
+      <tr>
+        <td class="feature">Multiple options per query</td>
+        <td class="yes">3 options</td>
+        <td class="no">1 option</td>
+        <td class="partial">Prose</td>
+        <td class="no">No</td>
+      </tr>
+      <tr>
+        <td class="feature">Dependencies</td>
+        <td class="yes">curl + jq</td>
+        <td class="partial">Node.js</td>
+        <td class="partial">Browser</td>
+        <td class="yes">None</td>
+      </tr>
+      <tr>
+        <td class="feature">Cost</td>
+        <td class="yes">$0.0004/query</td>
+        <td class="partial">$10/mo</td>
+        <td class="partial">$20/mo</td>
+        <td class="yes">Free</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<div class="divider"></div>
+
+<!-- REAL MEMORY DATA (from actual usage) -->
+<section class="timeline-section fade-in">
+  <h2>First Session — Real Data</h2>
+  <div class="timeline">
+    <div class="timeline-item">
+      <div class="time">01:01:16</div>
+      <div class="event">Asked about IP addresses on the subnet. <code>arp -n</code> returned only the gateway.</div>
+    </div>
+    <div class="timeline-item">
+      <div class="time">01:01:36</div>
+      <div class="event">Pushed back: "you missed a bunch." Model tried filtered arp. Still only 1 result.</div>
+    </div>
+    <div class="timeline-item">
+      <div class="time">01:03:01</div>
+      <div class="event">Escalated to <code>nmap -sn 10.0.0.0/24</code>. Found 16 live hosts. Memory recorded the win.</div>
+    </div>
+    <div class="timeline-item">
+      <div class="time">01:11:18</div>
+      <div class="event">Asked about hard drive size. Model returned <code>lsblk -h</code> which showed help text instead of sizes. Self-correction would now catch this.</div>
+    </div>
+    <div class="timeline-item">
+      <div class="time">01:15:03</div>
+      <div class="event">Listed all Flatpak apps. Found 7 installed: Zen, Discord, Chrome, VS Code, GitHub Desktop, Obsidian, Telegram.</div>
+    </div>
+    <div class="timeline-item">
+      <div class="time">01:16:51</div>
+      <div class="event">Nuked all Flatpak apps except VS Code. Successfully removed Zen, Discord, started Obsidian removal. Some parsing errors on names with spaces.</div>
+    </div>
+    <div class="timeline-item">
+      <div class="time">01:17:53</div>
+      <div class="event">Searched apt for native replacements. Found discord and chromium in Pop!_OS repos.</div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<section class="footer">
+  <div class="ascii">
+    ╱|、<br>
+    (˚ˎ 。7<br>
+    |、˜〵<br>
+    じしˍ,)ノ
+  </div>
+  <p>ai-shell — built in one session, Feb 2026</p>
+  <p>~/.ai-shell.sh &bull; curl + jq &bull; Claude Haiku 4.5 &bull; bash</p>
+  <p style="margin-top: 1rem;">A tool that reads its own source code and suggests improvements to itself.</p>
+</section>
+
+<script>
+// Intersection Observer for fade-in animations
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      entry.target.classList.add('visible');
+    }
+  });
+}, { threshold: 0.1 });
+
+document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+
+// Animate stat numbers
+function animateNumbers() {
+  document.querySelectorAll('.stat .number').forEach(el => {
+    const text = el.textContent;
+    if (text === '∞' || text.startsWith('$')) return;
+    const target = parseInt(text);
+    if (isNaN(target)) return;
+    let current = 0;
+    const step = Math.max(1, Math.floor(target / 30));
+    const interval = setInterval(() => {
+      current += step;
+      if (current >= target) {
+        current = target;
+        clearInterval(interval);
+      }
+      el.textContent = current;
+    }, 30);
+  });
+}
+
+// Run animations when page loads
+window.addEventListener('load', () => {
+  setTimeout(animateNumbers, 500);
+});
+</script>
+
+</body>
+</html>
