@@ -57,16 +57,57 @@ _ai_random_art() {
 
 _ai_generate_context() {
     local ctx=""
+    local os_type=$(uname -s 2>/dev/null)
     ctx+="System: $(uname -srm)"$'\n'
-    ctx+="Distro: $(cat /etc/os-release 2>/dev/null | grep PRETTY_NAME | cut -d'"' -f2)"$'\n'
-    ctx+="CPU: $(grep 'model name' /proc/cpuinfo 2>/dev/null | head -1 | cut -d: -f2 | xargs)"$'\n'
-    ctx+="RAM: $(free -h 2>/dev/null | awk '/Mem:/{print $2}')"$'\n'
-    ctx+="GPU: $(lspci 2>/dev/null | grep -i 'vga\|3d' | cut -d: -f3- | xargs)"$'\n'
+
+    # Distro / OS name (cross-platform)
+    if [ -f /etc/os-release ]; then
+        ctx+="Distro: $(grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d'"' -f2)"$'\n'
+    elif [ "$os_type" = "Darwin" ]; then
+        ctx+="Distro: macOS $(sw_vers -productVersion 2>/dev/null)"$'\n'
+    fi
+
+    # CPU info (cross-platform)
+    if [ -f /proc/cpuinfo ]; then
+        ctx+="CPU: $(grep 'model name' /proc/cpuinfo 2>/dev/null | head -1 | cut -d: -f2 | xargs)"$'\n'
+    elif [ "$os_type" = "Darwin" ]; then
+        ctx+="CPU: $(sysctl -n machdep.cpu.brand_string 2>/dev/null)"$'\n'
+    fi
+
+    # RAM (cross-platform)
+    if command -v free &>/dev/null; then
+        ctx+="RAM: $(free -h 2>/dev/null | awk '/Mem:/{print $2}')"$'\n'
+    elif [ "$os_type" = "Darwin" ]; then
+        local mem_bytes=$(sysctl -n hw.memsize 2>/dev/null)
+        if [ -n "$mem_bytes" ]; then
+            ctx+="RAM: $((mem_bytes / 1073741824))G"$'\n'
+        fi
+    fi
+
+    # GPU (cross-platform)
+    if command -v lspci &>/dev/null; then
+        ctx+="GPU: $(lspci 2>/dev/null | grep -i 'vga\|3d' | cut -d: -f3- | xargs)"$'\n'
+    elif [ "$os_type" = "Darwin" ]; then
+        ctx+="GPU: $(system_profiler SPDisplaysDataType 2>/dev/null | grep 'Chipset Model' | cut -d: -f2 | xargs)"$'\n'
+    fi
+
     ctx+="Shell: $SHELL ($BASH_VERSION)"$'\n'
     ctx+="User: $(whoami) | Groups: $(groups 2>/dev/null)"$'\n'
-    ctx+="Package manager: $(basename "$(which apt dnf pacman zypper 2>/dev/null | head -1)" 2>/dev/null)"$'\n'
+
+    # Package manager (cross-platform)
+    local pkg_mgr=""
+    for pm in apt dnf pacman zypper brew; do
+        if command -v "$pm" &>/dev/null; then
+            pkg_mgr="$pm"
+            break
+        fi
+    done
+    ctx+="Package manager: ${pkg_mgr:-unknown}"$'\n'
+
     ctx+="Init: $(ps -p 1 -o comm= 2>/dev/null)"$'\n'
-    ctx+="Kernel params: $(cat /proc/cmdline 2>/dev/null)"
+    if [ -f /proc/cmdline ]; then
+        ctx+="Kernel params: $(cat /proc/cmdline 2>/dev/null)"
+    fi
     echo "$ctx"
 }
 
@@ -450,12 +491,40 @@ RULES:
         return 1
     fi
 
-    text=$(echo "$text" | sed 's/^```json//;s/^```//;s/```$//' | tr -d '\n')
+    # Strip markdown code fences if Claude wrapped the JSON
+    text=$(echo "$text" | sed -n '/^```/,/^```/{/^```/d;p}' 2>/dev/null)
+    if [ -z "$text" ]; then
+        # No fences found — use the original response text
+        text=$(echo "$response" | jq -r '.content[0].text' 2>/dev/null)
+    fi
+    text=$(echo "$text" | tr -d '\n')
+
+    # Validate that the response is valid JSON with required fields
+    if ! echo "$text" | jq empty 2>/dev/null; then
+        echo -e "\033[0;31mError: Claude returned invalid JSON. Raw response:\033[0m"
+        echo "$text"
+        return 1
+    fi
 
     local explanation=$(echo "$text" | jq -r '.explanation // empty' 2>/dev/null)
     local funfact=$(echo "$text" | jq -r '.funfact // empty' 2>/dev/null)
     local linus=$(echo "$text" | jq -r '.linus // empty' 2>/dev/null)
     local roast=$(echo "$text" | jq -r '.roast // empty' 2>/dev/null)
+
+    if [ -z "$explanation" ]; then
+        echo -e "\033[0;31mError: Response missing 'explanation' field.\033[0m"
+        echo "$text" | jq . 2>/dev/null || echo "$text"
+        return 1
+    fi
+
+    local options_count=$(echo "$text" | jq '.options | length' 2>/dev/null)
+    if [ "$options_count" = "null" ] || [ "$options_count" = "0" ] || [ -z "$options_count" ]; then
+        # No commands needed — explanation-only response
+        echo -en "\033[1A\033[2K"
+        echo -e "\033[0;36m→ $explanation\033[0m"
+        _ai_memory_log "$query" "" "$explanation" ""
+        return 0
+    fi
 
     local cmd1=$(echo "$text" | jq -r '.options[0].command // empty' 2>/dev/null)
     local lbl1=$(echo "$text" | jq -r '.options[0].label // empty' 2>/dev/null)
@@ -463,11 +532,6 @@ RULES:
     local lbl2=$(echo "$text" | jq -r '.options[1].label // empty' 2>/dev/null)
     local cmd3=$(echo "$text" | jq -r '.options[2].command // empty' 2>/dev/null)
     local lbl3=$(echo "$text" | jq -r '.options[2].label // empty' 2>/dev/null)
-
-    if [ -z "$explanation" ]; then
-        echo "$text"
-        return
-    fi
 
     # Clear "Thinking..." line
     echo -en "\033[1A\033[2K"
@@ -516,7 +580,12 @@ RULES:
             retry_text=$(_ai_retry "$api_key" "$system_prompt" "$query" "$selected_cmd" "$failure_reason" "$cmd_output")
 
             if [ -n "$retry_text" ]; then
-                retry_text=$(echo "$retry_text" | sed 's/^```json//;s/^```//;s/```$//' | tr -d '\n')
+                # Strip markdown fences from retry response
+                local stripped=$(echo "$retry_text" | sed -n '/^```/,/^```/{/^```/d;p}' 2>/dev/null)
+                if [ -n "$stripped" ]; then
+                    retry_text="$stripped"
+                fi
+                retry_text=$(echo "$retry_text" | tr -d '\n')
                 local retry_cmd=$(echo "$retry_text" | jq -r '.options[0].command // empty' 2>/dev/null)
                 local retry_expl=$(echo "$retry_text" | jq -r '.explanation // empty' 2>/dev/null)
 

@@ -10,6 +10,45 @@ SOURCE_FILE="$SCRIPT_DIR/ai-shell.sh"
 echo "=== AI Shelly Installer ==="
 echo ""
 
+# --- Check and install required dependencies ---
+missing=()
+for cmd in curl jq; do
+    if ! command -v "$cmd" &>/dev/null; then
+        missing+=("$cmd")
+    fi
+done
+
+if [ ${#missing[@]} -gt 0 ]; then
+    echo "Missing required dependencies: ${missing[*]}"
+
+    # Detect package manager
+    if command -v apt &>/dev/null; then
+        pkg_mgr="sudo apt install -y"
+    elif command -v dnf &>/dev/null; then
+        pkg_mgr="sudo dnf install -y"
+    elif command -v pacman &>/dev/null; then
+        pkg_mgr="sudo pacman -S --noconfirm"
+    elif command -v zypper &>/dev/null; then
+        pkg_mgr="sudo zypper install -y"
+    elif command -v brew &>/dev/null; then
+        pkg_mgr="brew install"
+    else
+        echo "Error: Could not detect package manager."
+        echo "Please install manually: ${missing[*]}"
+        exit 1
+    fi
+
+    read -p "Install ${missing[*]} using '$pkg_mgr'? [Y/n] " confirm
+    if [ -z "$confirm" ] || [ "$confirm" = "Y" ] || [ "$confirm" = "y" ]; then
+        $pkg_mgr "${missing[@]}"
+        echo "Dependencies installed."
+    else
+        echo "Error: ${missing[*]} required. Install them and re-run."
+        exit 1
+    fi
+fi
+echo ""
+
 # Copy script to home directory
 cp "$SOURCE_FILE" "$INSTALL_PATH"
 echo "Installed to $INSTALL_PATH"
