@@ -68,7 +68,7 @@ function _ai_show_config {
     Write-Host "┌─ AI Shelly Configuration ─┐" -ForegroundColor White
     Write-Host ""
     $provider = _ai_load_config "provider" "openai"
-    $model = _ai_load_config "model" "gpt-5-nano"
+    $model = _ai_load_config "model" "gpt-5-nano-2025-08-07"
     Write-Host "  Provider:     $provider" -ForegroundColor Cyan
     Write-Host "  Model:        $model" -ForegroundColor Cyan
     Write-Host ""
@@ -270,7 +270,7 @@ function _ai_get_api_key {
 function _ai_call_api {
     param([string]$ApiKey, [string]$SystemPrompt, [array]$Messages, [int]$MaxTokens = 1024)
     $provider = _ai_load_config "provider" "openai"
-    $model = _ai_load_config "model" "gpt-5-nano"
+    $model = _ai_load_config "model" "gpt-5-nano-2025-08-07"
 
     try {
         switch ($provider) {
@@ -291,9 +291,9 @@ function _ai_call_api {
                 $allMsgs = @(@{ role = "system"; content = $SystemPrompt })
                 $allMsgs += @($Messages | ForEach-Object { @{ role = $_.role; content = $_.content } })
                 $body = @{
-                    model      = $model
-                    max_tokens = $MaxTokens
-                    messages   = $allMsgs
+                    model                 = $model
+                    max_completion_tokens = $MaxTokens
+                    messages              = $allMsgs
                 } | ConvertTo-Json -Depth 5
                 $resp = Invoke-RestMethod -Uri "https://api.openai.com/v1/chat/completions" `
                     -Method Post -ContentType "application/json" `
@@ -346,7 +346,7 @@ function ai {
             }
             "model" {
                 $curProvider = _ai_load_config "provider" "openai"
-                $curModel = _ai_load_config "model" "gpt-5-nano"
+                $curModel = _ai_load_config "model" "gpt-5-nano-2025-08-07"
 
                 # Helper: show available models for a provider
                 $showModels = {
@@ -389,7 +389,7 @@ function ai {
                 }
                 $newProvider = $Args[1]
                 $newModel = if ($Args.Count -ge 3) { $Args[2] } else { $null }
-                $defaults = @{ anthropic = "claude-haiku-4-5-20251001"; openai = "gpt-5-nano"; google = "gemini-3-flash" }
+                $defaults = @{ anthropic = "claude-haiku-4-5-20251001"; openai = "gpt-5-nano-2025-08-07"; google = "gemini-3.0-flash" }
                 if (-not $defaults.ContainsKey($newProvider)) {
                     Write-Host "Unknown provider: $newProvider (use: openai, anthropic, google)" -ForegroundColor Red
                     return

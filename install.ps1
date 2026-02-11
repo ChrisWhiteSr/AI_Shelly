@@ -71,7 +71,7 @@ else {
 if (-not (Test-Path $ConfigDir)) { New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null }
 
 $provider = "openai"
-$model = "gpt-5-nano"
+$model = "gpt-5-nano-2025-08-07"
 
 if (Test-Path $KeyFile) {
     Write-Host "  API key already configured." -ForegroundColor DarkGray
@@ -119,10 +119,10 @@ switch ($provider) {
         Write-Host ""
         $modelChoice = Read-Host "  Pick [1/2/3/4] (default: 1)"
         switch ($modelChoice) {
-            "2" { $model = "gpt-5-mini" }
-            "3" { $model = "gpt-5.1" }
-            "4" { $model = "gpt-5.2" }
-            default { $model = "gpt-5-nano" }
+            "2" { $model = "gpt-5-mini-2025-08-07" }
+            "3" { $model = "gpt-5.1-2025-11-12" }
+            "4" { $model = "gpt-5.2-2025-12-11" }
+            default { $model = "gpt-5-nano-2025-08-07" }
         }
     }
     "anthropic" {
@@ -148,7 +148,7 @@ switch ($provider) {
             "2" { $model = "gemini-2.5-flash" }
             "3" { $model = "gemini-2.5-flash-lite" }
             "4" { $model = "gemini-2.5-pro" }
-            default { $model = "gemini-3-flash" }
+            default { $model = "gemini-3.0-flash" }
         }
     }
 }

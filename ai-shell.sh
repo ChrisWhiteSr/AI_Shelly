@@ -342,9 +342,9 @@ _ai_call_openai() {
         -H "Authorization: Bearer $api_key" \
         -d "$(jq -n \
             --argjson messages "$full_messages" \
-            --argjson max_tokens "$max_tokens" \
+            --argjson max_completion_tokens "$max_tokens" \
             --arg model "$model" \
-            '{model:$model, max_tokens:$max_tokens, messages:$messages}')" 2>/dev/null
+            '{model:$model, max_completion_tokens:$max_completion_tokens, messages:$messages}')" 2>/dev/null
 }
 
 _ai_call_google() {
@@ -486,7 +486,7 @@ ai() {
             }
             if [ -z "$1" ]; then
                 local p=$(_ai_load_config ".provider" "openai")
-                local m=$(_ai_load_config ".model" "gpt-5-nano")
+                local m=$(_ai_load_config ".model" "gpt-5-nano-2025-08-07")
                 echo -e "Current: \033[0;36m$p / $m\033[0m"
                 _ai_show_models "$p"
                 echo -e "  \033[0;90mUsage:\033[0m"
@@ -499,8 +499,8 @@ ai() {
             local new_model="$2"
             case "$new_provider" in
                 anthropic) [ -z "$new_model" ] && { _ai_show_models "$new_provider"; new_model="claude-haiku-4-5-20251001"; echo -e "  \033[0;90mDefaulting to: $new_model\033[0m"; } ;;
-                openai)    [ -z "$new_model" ] && { _ai_show_models "$new_provider"; new_model="gpt-5-nano"; echo -e "  \033[0;90mDefaulting to: $new_model\033[0m"; } ;;
-                google)    [ -z "$new_model" ] && { _ai_show_models "$new_provider"; new_model="gemini-3-flash"; echo -e "  \033[0;90mDefaulting to: $new_model\033[0m"; } ;;
+                openai)    [ -z "$new_model" ] && { _ai_show_models "$new_provider"; new_model="gpt-5-nano-2025-08-07"; echo -e "  \033[0;90mDefaulting to: $new_model\033[0m"; } ;;
+                google)    [ -z "$new_model" ] && { _ai_show_models "$new_provider"; new_model="gemini-3.0-flash"; echo -e "  \033[0;90mDefaulting to: $new_model\033[0m"; } ;;
                 *) echo "Unknown provider: $new_provider (use: anthropic, openai, google)"; return 1 ;;
             esac
             _ai_set_config ".provider" "\"$new_provider\""

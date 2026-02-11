@@ -174,8 +174,8 @@ detect_provider_from_key() {
 default_model_for_provider() {
     case "$1" in
         anthropic) echo "claude-haiku-4-5-20251001" ;;
-        openai)    echo "gpt-5-nano" ;;
-        google)    echo "gemini-3-flash" ;;
+        openai)    echo "gpt-5-nano-2025-08-07" ;;
+        google)    echo "gemini-3.0-flash" ;;
         *)         echo "claude-haiku-4-5-20251001" ;;
     esac
 }
@@ -223,10 +223,10 @@ case "$PROVIDER" in
         echo ""
         read -p "  Pick [1/2/3/4] (default: 1): " model_choice
         case "$model_choice" in
-            2) MODEL="gpt-5-mini" ;;
-            3) MODEL="gpt-5.1" ;;
-            4) MODEL="gpt-5.2" ;;
-            *) MODEL="gpt-5-nano" ;;
+            2) MODEL="gpt-5-mini-2025-08-07" ;;
+            3) MODEL="gpt-5.1-2025-11-12" ;;
+            4) MODEL="gpt-5.2-2025-12-11" ;;
+            *) MODEL="gpt-5-nano-2025-08-07" ;;
         esac
         ;;
     anthropic)
@@ -252,7 +252,7 @@ case "$PROVIDER" in
             2) MODEL="gemini-2.5-flash" ;;
             3) MODEL="gemini-2.5-flash-lite" ;;
             4) MODEL="gemini-2.5-pro" ;;
-            *) MODEL="gemini-3-flash" ;;
+            *) MODEL="gemini-3.0-flash" ;;
         esac
         ;;
 esac
