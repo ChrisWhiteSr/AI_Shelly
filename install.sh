@@ -174,8 +174,8 @@ detect_provider_from_key() {
 default_model_for_provider() {
     case "$1" in
         anthropic) echo "claude-haiku-4-5-20251001" ;;
-        openai)    echo "gpt-4o-mini" ;;
-        google)    echo "gemini-2.0-flash" ;;
+        openai)    echo "gpt-5-nano" ;;
+        google)    echo "gemini-3-flash" ;;
         *)         echo "claude-haiku-4-5-20251001" ;;
     esac
 }
@@ -205,6 +205,59 @@ else
 fi
 
 MODEL=$(default_model_for_provider "$PROVIDER")
+
+# ──────────────────────────────────────
+# 5b. MODEL SELECTION
+# ──────────────────────────────────────
+echo ""
+echo -e "${BOLD}Model Selection${RESET} (provider: ${CYAN}$PROVIDER${RESET})"
+echo -e "${DIM}  Choose your model. Switch anytime with: ai model${RESET}"
+echo ""
+
+case "$PROVIDER" in
+    openai)
+        echo -e "  ${GREEN}[1]${RESET} gpt-5-nano          \$0.05/1M in  — ultra-cheap, fastest"
+        echo -e "  [2] gpt-5-mini          \$0.25/1M in  — fast, affordable"
+        echo -e "  [3] gpt-5.1             \$1.25/1M in  — balanced"
+        echo -e "  [4] gpt-5.2             \$1.75/1M in  — premium reasoning"
+        echo ""
+        read -p "  Pick [1/2/3/4] (default: 1): " model_choice
+        case "$model_choice" in
+            2) MODEL="gpt-5-mini" ;;
+            3) MODEL="gpt-5.1" ;;
+            4) MODEL="gpt-5.2" ;;
+            *) MODEL="gpt-5-nano" ;;
+        esac
+        ;;
+    anthropic)
+        echo -e "  ${GREEN}[1]${RESET} claude-haiku-4-5    \$1.00/1M in  — fast, cheapest"
+        echo -e "  [2] claude-sonnet-4-5   \$3.00/1M in  — balanced"
+        echo -e "  [3] claude-opus-4-5     \$5.00/1M in  — most capable"
+        echo ""
+        read -p "  Pick [1/2/3] (default: 1): " model_choice
+        case "$model_choice" in
+            2) MODEL="claude-sonnet-4-5-20250514" ;;
+            3) MODEL="claude-opus-4-5-20250120" ;;
+            *) MODEL="claude-haiku-4-5-20251001" ;;
+        esac
+        ;;
+    google)
+        echo -e "  ${GREEN}[1]${RESET} gemini-3-flash      \$0.50/1M in  — latest gen, fast"
+        echo -e "  [2] gemini-2.5-flash     \$0.30/1M in  — stable workhorse"
+        echo -e "  [3] gemini-2.5-flash-lite \$0.10/1M in — ultra-cheap"
+        echo -e "  [4] gemini-2.5-pro       \$1.25/1M in  — most capable"
+        echo ""
+        read -p "  Pick [1/2/3/4] (default: 1): " model_choice
+        case "$model_choice" in
+            2) MODEL="gemini-2.5-flash" ;;
+            3) MODEL="gemini-2.5-flash-lite" ;;
+            4) MODEL="gemini-2.5-pro" ;;
+            *) MODEL="gemini-3-flash" ;;
+        esac
+        ;;
+esac
+
+echo -e "  ${GREEN}✓${RESET} Selected: ${BOLD}$MODEL${RESET}"
 
 # ──────────────────────────────────────
 # 6. FEATURE CONFIGURATION

@@ -147,8 +147,8 @@ The last 3 message exchanges are kept in `~/.cache/ai-shell/conversation.json` a
 
 ```json
 {
-  "provider": "anthropic",
-  "model": "claude-haiku-4-5-20251001",
+  "provider": "openai",
+  "model": "gpt-5-nano",
   "features": {
     "funfact": true,
     "linus_quotes": true,
@@ -205,16 +205,17 @@ ai config set features.ascii_art false
 
 ### Multi-Provider Support
 
-| Provider | Key Format | Default Model |
-|----------|-----------|---------------|
-| Anthropic | `sk-ant-...` | `claude-haiku-4-5-20251001` |
-| OpenAI | `sk-...` | `gpt-4o-mini` |
-| Google | `AI...` | `gemini-2.0-flash` |
+| Provider | Key Format | Default Model | Notes |
+|----------|-----------|---------------|-------|
+| OpenAI | `sk-...` | `gpt-5-nano` | $0.05/1M in — cheapest |
+| Google | `AI...` | `gemini-3-flash` | $0.50/1M in — latest gen |
+| Anthropic | `sk-ant-...` | `claude-haiku-4-5` | $1.00/1M in — fast |
 
-You can store separate keys per provider:
-```bash
-echo 'sk-ant-...' > ~/.config/ai-shell/api-key-anthropic
-echo 'sk-...' > ~/.config/ai-shell/api-key-openai
+See all available models with `ai model`. Switch at runtime:
+```
+ai model openai              # shows models, switches to default
+ai model openai gpt-5-mini   # switch to specific model
+ai model google gemini-2.5-flash-lite  # ultra-cheap Google option
 ```
 
 ## Project Structure

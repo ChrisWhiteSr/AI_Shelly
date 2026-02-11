@@ -457,24 +457,50 @@ ai() {
             ;;
         model)
             shift
-            if [ -z "$1" ]; then
-                local p=$(_ai_load_config ".provider" "anthropic")
-                local m=$(_ai_load_config ".model" "claude-haiku-4-5-20251001")
-                echo -e "Current: \033[0;36m$p / $m\033[0m"
+            _ai_show_models() {
+                local prov="$1"
                 echo ""
-                echo "Usage: ai model <provider> [model-name]"
-                echo "  Providers: anthropic, openai, google"
-                echo "  Examples:"
-                echo "    ai model openai"
-                echo "    ai model anthropic claude-sonnet-4-20250514"
+                case "$prov" in
+                    openai)
+                        echo -e "  Available OpenAI models:"
+                        echo -e "    ${GREEN}gpt-5-nano${RESET}          \$0.05/1M in  — ultra-cheap, fastest"
+                        echo -e "    gpt-5-mini          \$0.25/1M in  — fast, affordable"
+                        echo -e "    gpt-5.1             \$1.25/1M in  — balanced"
+                        echo -e "    gpt-5.2             \$1.75/1M in  — premium reasoning"
+                        ;;
+                    anthropic)
+                        echo -e "  Available Anthropic models:"
+                        echo -e "    ${GREEN}claude-haiku-4-5${RESET}    \$1.00/1M in  — fast, cheapest"
+                        echo -e "    claude-sonnet-4-5   \$3.00/1M in  — balanced"
+                        echo -e "    claude-opus-4-5     \$5.00/1M in  — most capable"
+                        ;;
+                    google)
+                        echo -e "  Available Google models:"
+                        echo -e "    ${GREEN}gemini-3-flash${RESET}      \$0.50/1M in  — latest gen, fast"
+                        echo -e "    gemini-2.5-flash    \$0.30/1M in  — stable workhorse"
+                        echo -e "    gemini-2.5-flash-lite \$0.10/1M in — ultra-cheap"
+                        echo -e "    gemini-2.5-pro      \$1.25/1M in  — most capable"
+                        ;;
+                esac
+                echo ""
+            }
+            if [ -z "$1" ]; then
+                local p=$(_ai_load_config ".provider" "openai")
+                local m=$(_ai_load_config ".model" "gpt-5-nano")
+                echo -e "Current: \033[0;36m$p / $m\033[0m"
+                _ai_show_models "$p"
+                echo -e "  \033[0;90mUsage:\033[0m"
+                echo -e "  \033[0;90m  ai model <provider>          — switch provider (use default model)\033[0m"
+                echo -e "  \033[0;90m  ai model <provider> <model>  — switch to specific model\033[0m"
+                echo -e "  \033[0;90m  Providers: openai, anthropic, google\033[0m"
                 return 0
             fi
             local new_provider="$1"
             local new_model="$2"
             case "$new_provider" in
-                anthropic) [ -z "$new_model" ] && new_model="claude-haiku-4-5-20251001" ;;
-                openai)    [ -z "$new_model" ] && new_model="gpt-4o-mini" ;;
-                google)    [ -z "$new_model" ] && new_model="gemini-2.0-flash" ;;
+                anthropic) [ -z "$new_model" ] && { _ai_show_models "$new_provider"; new_model="claude-haiku-4-5-20251001"; echo -e "  \033[0;90mDefaulting to: $new_model\033[0m"; } ;;
+                openai)    [ -z "$new_model" ] && { _ai_show_models "$new_provider"; new_model="gpt-5-nano"; echo -e "  \033[0;90mDefaulting to: $new_model\033[0m"; } ;;
+                google)    [ -z "$new_model" ] && { _ai_show_models "$new_provider"; new_model="gemini-3-flash"; echo -e "  \033[0;90mDefaulting to: $new_model\033[0m"; } ;;
                 *) echo "Unknown provider: $new_provider (use: anthropic, openai, google)"; return 1 ;;
             esac
             _ai_set_config ".provider" "\"$new_provider\""

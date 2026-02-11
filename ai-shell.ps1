@@ -68,7 +68,7 @@ function _ai_show_config {
     Write-Host "┌─ AI Shelly Configuration ─┐" -ForegroundColor White
     Write-Host ""
     $provider = _ai_load_config "provider" "openai"
-    $model = _ai_load_config "model" "gpt-4o-mini"
+    $model = _ai_load_config "model" "gpt-5-nano"
     Write-Host "  Provider:     $provider" -ForegroundColor Cyan
     Write-Host "  Model:        $model" -ForegroundColor Cyan
     Write-Host ""
@@ -270,7 +270,7 @@ function _ai_get_api_key {
 function _ai_call_api {
     param([string]$ApiKey, [string]$SystemPrompt, [array]$Messages, [int]$MaxTokens = 1024)
     $provider = _ai_load_config "provider" "openai"
-    $model = _ai_load_config "model" "gpt-4o-mini"
+    $model = _ai_load_config "model" "gpt-5-nano"
 
     try {
         switch ($provider) {
@@ -345,21 +345,60 @@ function ai {
                 return
             }
             "model" {
+                $curProvider = _ai_load_config "provider" "openai"
+                $curModel = _ai_load_config "model" "gpt-5-nano"
+
+                # Helper: show available models for a provider
+                $showModels = {
+                    param([string]$prov)
+                    Write-Host ""
+                    switch ($prov) {
+                        "openai" {
+                            Write-Host "  Available OpenAI models:" -ForegroundColor White
+                            Write-Host "    gpt-5-nano          `$0.05/1M in   — ultra-cheap, fastest" -ForegroundColor Green
+                            Write-Host "    gpt-5-mini          `$0.25/1M in   — fast, affordable" -ForegroundColor White
+                            Write-Host "    gpt-5.1             `$1.25/1M in   — balanced" -ForegroundColor White
+                            Write-Host "    gpt-5.2             `$1.75/1M in   — premium reasoning" -ForegroundColor White
+                        }
+                        "anthropic" {
+                            Write-Host "  Available Anthropic models:" -ForegroundColor White
+                            Write-Host "    claude-haiku-4-5    `$1.00/1M in   — fast, cheapest" -ForegroundColor Green
+                            Write-Host "    claude-sonnet-4-5   `$3.00/1M in   — balanced" -ForegroundColor White
+                            Write-Host "    claude-opus-4-5     `$5.00/1M in   — most capable" -ForegroundColor White
+                        }
+                        "google" {
+                            Write-Host "  Available Google models:" -ForegroundColor White
+                            Write-Host "    gemini-3-flash      `$0.50/1M in   — latest gen, fast" -ForegroundColor Green
+                            Write-Host "    gemini-2.5-flash    `$0.30/1M in   — stable workhorse" -ForegroundColor White
+                            Write-Host "    gemini-2.5-flash-lite `$0.10/1M in — ultra-cheap" -ForegroundColor White
+                            Write-Host "    gemini-2.5-pro      `$1.25/1M in   — most capable" -ForegroundColor White
+                        }
+                    }
+                    Write-Host ""
+                }
+
                 if ($Args.Count -lt 2) {
-                    $p = _ai_load_config "provider" "openai"
-                    $m = _ai_load_config "model" "gpt-4o-mini"
-                    Write-Host "Current: $p / $m" -ForegroundColor Cyan
-                    Write-Host "`nUsage: ai model <provider> [model-name]"
-                    Write-Host "  Providers: anthropic, openai, google"
+                    # No args — show current + all available
+                    Write-Host "Current: $curProvider / $curModel" -ForegroundColor Cyan
+                    & $showModels $curProvider
+                    Write-Host "  Usage:" -ForegroundColor DarkGray
+                    Write-Host "    ai model <provider>          — switch provider (use default model)" -ForegroundColor DarkGray
+                    Write-Host "    ai model <provider> <model>  — switch to specific model" -ForegroundColor DarkGray
+                    Write-Host "    Providers: openai, anthropic, google" -ForegroundColor DarkGray
                     return
                 }
                 $newProvider = $Args[1]
                 $newModel = if ($Args.Count -ge 3) { $Args[2] } else { $null }
-                $defaults = @{ anthropic = "claude-haiku-4-5-20251001"; openai = "gpt-4o-mini"; google = "gemini-2.0-flash" }
+                $defaults = @{ anthropic = "claude-haiku-4-5-20251001"; openai = "gpt-5-nano"; google = "gemini-3-flash" }
                 if (-not $defaults.ContainsKey($newProvider)) {
-                    Write-Host "Unknown provider: $newProvider" -ForegroundColor Red; return
+                    Write-Host "Unknown provider: $newProvider (use: openai, anthropic, google)" -ForegroundColor Red
+                    return
                 }
-                if (-not $newModel) { $newModel = $defaults[$newProvider] }
+                if (-not $newModel) {
+                    $newModel = $defaults[$newProvider]
+                    & $showModels $newProvider
+                    Write-Host "  Defaulting to: $newModel" -ForegroundColor DarkGray
+                }
                 _ai_set_config "provider" $newProvider
                 _ai_set_config "model" $newModel
                 Write-Host "✓ Switched to $newProvider / $newModel" -ForegroundColor Green

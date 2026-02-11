@@ -77,7 +77,7 @@ Both share the same config format (`config.json`) and file structure.
 ```json
 {
     "provider": "openai",
-    "model": "gpt-4o-mini",
+    "model": "gpt-5-nano",
     "features": {
         "funfact": true,
         "linus_quotes": true,
@@ -107,9 +107,9 @@ Supports three providers with a unified interface:
 
 | Provider | API Endpoint | Key Format | Default Model |
 |----------|-------------|-----------|---------------|
+| OpenAI | `api.openai.com/v1/chat/completions` | `sk-...` | `gpt-5-nano` |
+| Google | `generativelanguage.googleapis.com/v1beta` | `AI...` | `gemini-3-flash` |
 | Anthropic | `api.anthropic.com/v1/messages` | `sk-ant-...` | `claude-haiku-4-5-20251001` |
-| OpenAI | `api.openai.com/v1/chat/completions` | `sk-...` | `gpt-4o-mini` |
-| Google | `generativelanguage.googleapis.com/v1beta` | `AI...` | `gemini-2.0-flash` |
 
 Provider is auto-detected from API key format during installation. Users can store per-provider keys:
 - `~/.config/ai-shell/api-key` — default key
@@ -248,12 +248,12 @@ Using the lowest-cost model per provider:
 
 | Provider | Model | Input Cost | Output Cost | ~Cost/Query |
 |----------|-------|-----------|------------|------------|
-| Anthropic | Haiku 4.5 | $0.80/1M | $4.00/1M | ~$0.002 |
-| OpenAI | GPT-4o-mini | $0.15/1M | $0.60/1M | ~$0.0004 |
-| Google | Gemini 2.0 Flash | $0.10/1M | $0.40/1M | ~$0.0003 |
+| OpenAI | GPT-5-nano | $0.05/1M | $0.005/1M | ~$0.00003 |
+| Google | Gemini 3 Flash | $0.50/1M | $3.00/1M | ~$0.0009 |
+| Anthropic | Haiku 4.5 | $1.00/1M | $5.00/1M | ~$0.002 |
 
 Typical query: ~500 tokens in, ~200 tokens out.
-1,000 queries/month ≈ **$0.30–$2.00/month** depending on provider.
+1,000 queries/month ≈ **$0.03–$2.00/month** depending on provider.
 
 ---
 

@@ -71,14 +71,14 @@ else {
 if (-not (Test-Path $ConfigDir)) { New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null }
 
 $provider = "openai"
-$model = "gpt-4o-mini"
+$model = "gpt-5-nano"
 
 if (Test-Path $KeyFile) {
     Write-Host "  API key already configured." -ForegroundColor DarkGray
     $existingKey = (Get-Content $KeyFile -Raw).Trim()
-    if ($existingKey.StartsWith("sk-ant-")) { $provider = "anthropic"; $model = "claude-haiku-4-5-20251001" }
-    elseif ($existingKey.StartsWith("sk-")) { $provider = "openai"; $model = "gpt-4o-mini" }
-    elseif ($existingKey.StartsWith("AI")) { $provider = "google"; $model = "gemini-2.0-flash" }
+    if ($existingKey.StartsWith("sk-ant-")) { $provider = "anthropic" }
+    elseif ($existingKey.StartsWith("sk-")) { $provider = "openai" }
+    elseif ($existingKey.StartsWith("AI")) { $provider = "google" }
 }
 else {
     Write-Host ""
@@ -91,9 +91,9 @@ else {
     $apiKey = Read-Host "Paste your API key (or press Enter to skip)"
     if ($apiKey) {
         $apiKey | Set-Content $KeyFile -NoNewline
-        if ($apiKey.StartsWith("sk-ant-")) { $provider = "anthropic"; $model = "claude-haiku-4-5-20251001" }
-        elseif ($apiKey.StartsWith("sk-")) { $provider = "openai"; $model = "gpt-4o-mini" }
-        elseif ($apiKey.StartsWith("AI")) { $provider = "google"; $model = "gemini-2.0-flash" }
+        if ($apiKey.StartsWith("sk-ant-")) { $provider = "anthropic" }
+        elseif ($apiKey.StartsWith("sk-")) { $provider = "openai" }
+        elseif ($apiKey.StartsWith("AI")) { $provider = "google" }
         Write-Host "✓ API key saved (detected provider: $provider)" -ForegroundColor Green
     }
     else {
@@ -101,6 +101,58 @@ else {
         Write-Host "    'your-key' | Set-Content $KeyFile" -ForegroundColor Yellow
     }
 }
+
+# ──────────────────────────────────────
+# 4b. MODEL SELECTION
+# ──────────────────────────────────────
+Write-Host ""
+Write-Host "Model Selection (provider: $provider)" -ForegroundColor White
+Write-Host "  Choose your model. Switch anytime with: ai model" -ForegroundColor DarkGray
+Write-Host ""
+
+switch ($provider) {
+    "openai" {
+        Write-Host "  [1] gpt-5-nano          `$0.05/1M in   — ultra-cheap, fastest" -ForegroundColor Green
+        Write-Host "  [2] gpt-5-mini          `$0.25/1M in   — fast, affordable" -ForegroundColor White
+        Write-Host "  [3] gpt-5.1             `$1.25/1M in   — balanced" -ForegroundColor White
+        Write-Host "  [4] gpt-5.2             `$1.75/1M in   — premium reasoning" -ForegroundColor White
+        Write-Host ""
+        $modelChoice = Read-Host "  Pick [1/2/3/4] (default: 1)"
+        switch ($modelChoice) {
+            "2" { $model = "gpt-5-mini" }
+            "3" { $model = "gpt-5.1" }
+            "4" { $model = "gpt-5.2" }
+            default { $model = "gpt-5-nano" }
+        }
+    }
+    "anthropic" {
+        Write-Host "  [1] claude-haiku-4-5    `$1.00/1M in   — fast, cheapest" -ForegroundColor Green
+        Write-Host "  [2] claude-sonnet-4-5   `$3.00/1M in   — balanced" -ForegroundColor White
+        Write-Host "  [3] claude-opus-4-5     `$5.00/1M in   — most capable" -ForegroundColor White
+        Write-Host ""
+        $modelChoice = Read-Host "  Pick [1/2/3] (default: 1)"
+        switch ($modelChoice) {
+            "2" { $model = "claude-sonnet-4-5-20250514" }
+            "3" { $model = "claude-opus-4-5-20250120" }
+            default { $model = "claude-haiku-4-5-20251001" }
+        }
+    }
+    "google" {
+        Write-Host "  [1] gemini-3-flash      `$0.50/1M in   — latest gen, fast" -ForegroundColor Green
+        Write-Host "  [2] gemini-2.5-flash     `$0.30/1M in   — stable workhorse" -ForegroundColor White
+        Write-Host "  [3] gemini-2.5-flash-lite `$0.10/1M in  — ultra-cheap" -ForegroundColor White
+        Write-Host "  [4] gemini-2.5-pro       `$1.25/1M in   — most capable" -ForegroundColor White
+        Write-Host ""
+        $modelChoice = Read-Host "  Pick [1/2/3/4] (default: 1)"
+        switch ($modelChoice) {
+            "2" { $model = "gemini-2.5-flash" }
+            "3" { $model = "gemini-2.5-flash-lite" }
+            "4" { $model = "gemini-2.5-pro" }
+            default { $model = "gemini-3-flash" }
+        }
+    }
+}
+Write-Host "  ✓ Selected: $model" -ForegroundColor Green
 
 # ──────────────────────────────────────
 # 5. FEATURE CONFIGURATION
