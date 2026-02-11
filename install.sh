@@ -1,16 +1,82 @@
 #!/bin/bash
-# AI Shelly installer
+# AI Shelly — Smart Installer
+# Detects OS, shell, installs deps, configures features
 
 set -e
 
 INSTALL_PATH="$HOME/.ai-shell.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_FILE="$SCRIPT_DIR/ai-shell.sh"
+CONFIG_DIR="$HOME/.config/ai-shell"
+CONFIG_FILE="$CONFIG_DIR/config.json"
+KEY_FILE="$CONFIG_DIR/api-key"
 
-echo "=== AI Shelly Installer ==="
+# --- Colors ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[0;90m'
+RESET='\033[0m'
+
+echo ""
+echo -e "${BOLD}╔══════════════════════════════════════╗${RESET}"
+echo -e "${BOLD}║       AI Shelly — Installer          ║${RESET}"
+echo -e "${BOLD}╚══════════════════════════════════════╝${RESET}"
 echo ""
 
-# --- Check and install required dependencies ---
+# ──────────────────────────────────────
+# 1. DETECT OPERATING SYSTEM
+# ──────────────────────────────────────
+detect_os() {
+    local os_type=$(uname -s 2>/dev/null)
+    case "$os_type" in
+        Linux*)
+            if grep -qi microsoft /proc/version 2>/dev/null; then
+                echo "wsl"
+            else
+                echo "linux"
+            fi
+            ;;
+        Darwin*)  echo "macos" ;;
+        CYGWIN*)  echo "cygwin" ;;
+        MINGW*|MSYS*) echo "gitbash" ;;
+        *)        echo "unknown" ;;
+    esac
+}
+
+detect_distro() {
+    if [ -f /etc/os-release ]; then
+        grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d'"' -f2
+    elif [ "$(uname -s)" = "Darwin" ]; then
+        echo "macOS $(sw_vers -productVersion 2>/dev/null)"
+    else
+        uname -s 2>/dev/null
+    fi
+}
+
+detect_shell() {
+    local shell_name=$(basename "$SHELL" 2>/dev/null)
+    case "$shell_name" in
+        zsh)  echo "zsh" ;;
+        fish) echo "fish" ;;
+        *)    echo "bash" ;;
+    esac
+}
+
+OS_TYPE=$(detect_os)
+DISTRO=$(detect_distro)
+SHELL_TYPE=$(detect_shell)
+
+echo -e "${CYAN}Detected environment:${RESET}"
+echo -e "  OS:    ${GREEN}$OS_TYPE${RESET} ($DISTRO)"
+echo -e "  Shell: ${GREEN}$SHELL_TYPE${RESET}"
+echo ""
+
+# ──────────────────────────────────────
+# 2. CHECK & INSTALL DEPENDENCIES
+# ──────────────────────────────────────
 missing=()
 for cmd in curl jq; do
     if ! command -v "$cmd" &>/dev/null; then
@@ -19,91 +85,212 @@ for cmd in curl jq; do
 done
 
 if [ ${#missing[@]} -gt 0 ]; then
-    echo "Missing required dependencies: ${missing[*]}"
+    echo -e "${YELLOW}Missing dependencies: ${missing[*]}${RESET}"
 
-    # Detect package manager
-    if command -v apt &>/dev/null; then
-        pkg_mgr="sudo apt install -y"
-    elif command -v dnf &>/dev/null; then
-        pkg_mgr="sudo dnf install -y"
-    elif command -v pacman &>/dev/null; then
-        pkg_mgr="sudo pacman -S --noconfirm"
-    elif command -v zypper &>/dev/null; then
-        pkg_mgr="sudo zypper install -y"
-    elif command -v brew &>/dev/null; then
-        pkg_mgr="brew install"
-    else
-        echo "Error: Could not detect package manager."
-        echo "Please install manually: ${missing[*]}"
-        exit 1
-    fi
+    pkg_mgr=""
+    case "$OS_TYPE" in
+        linux|wsl)
+            if command -v apt &>/dev/null; then pkg_mgr="sudo apt install -y"
+            elif command -v dnf &>/dev/null; then pkg_mgr="sudo dnf install -y"
+            elif command -v pacman &>/dev/null; then pkg_mgr="sudo pacman -S --noconfirm"
+            elif command -v zypper &>/dev/null; then pkg_mgr="sudo zypper install -y"
+            elif command -v apk &>/dev/null; then pkg_mgr="sudo apk add"
+            fi
+            ;;
+        macos)
+            if command -v brew &>/dev/null; then pkg_mgr="brew install"
+            else
+                echo -e "${RED}Homebrew not found. Install it first:${RESET}"
+                echo '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+                exit 1
+            fi
+            ;;
+        gitbash|cygwin)
+            echo -e "${RED}Please install ${missing[*]} manually (e.g. via chocolatey or scoop).${RESET}"
+            exit 1
+            ;;
+    esac
 
-    read -p "Install ${missing[*]} using '$pkg_mgr'? [Y/n] " confirm
-    if [ -z "$confirm" ] || [ "$confirm" = "Y" ] || [ "$confirm" = "y" ]; then
-        $pkg_mgr "${missing[@]}"
-        echo "Dependencies installed."
-    else
-        echo "Error: ${missing[*]} required. Install them and re-run."
-        exit 1
+    if [ -n "$pkg_mgr" ]; then
+        read -p "Install ${missing[*]} using '$pkg_mgr'? [Y/n] " confirm
+        if [ -z "$confirm" ] || [[ "$confirm" =~ ^[Yy] ]]; then
+            $pkg_mgr "${missing[@]}"
+            echo -e "${GREEN}Dependencies installed.${RESET}"
+        else
+            echo -e "${RED}Cannot continue without ${missing[*]}.${RESET}"
+            exit 1
+        fi
     fi
 fi
-echo ""
 
-# Copy script to home directory
+# ──────────────────────────────────────
+# 3. INSTALL SCRIPT
+# ──────────────────────────────────────
 cp "$SOURCE_FILE" "$INSTALL_PATH"
-echo "Installed to $INSTALL_PATH"
+echo -e "${GREEN}✓${RESET} Installed to ${BOLD}$INSTALL_PATH${RESET}"
 
-# Detect shell config file
+# ──────────────────────────────────────
+# 4. HOOK INTO SHELL RC
+# ──────────────────────────────────────
 SHELL_RC=""
-if [ -n "$ZSH_VERSION" ] || [ "$SHELL" = "$(which zsh 2>/dev/null)" ]; then
-    SHELL_RC="$HOME/.zshrc"
-else
-    SHELL_RC="$HOME/.bashrc"
+case "$SHELL_TYPE" in
+    zsh)  SHELL_RC="$HOME/.zshrc" ;;
+    fish) SHELL_RC="$HOME/.config/fish/config.fish" ;;
+    *)    SHELL_RC="$HOME/.bashrc" ;;
+esac
+
+SOURCE_LINE="source \"$INSTALL_PATH\""
+if [ "$SHELL_TYPE" = "fish" ]; then
+    SOURCE_LINE="source $INSTALL_PATH"
 fi
 
-# Add source line if not already present
-SOURCE_LINE="source \"$INSTALL_PATH\""
 if ! grep -qF ".ai-shell.sh" "$SHELL_RC" 2>/dev/null; then
     echo "" >> "$SHELL_RC"
-    echo "# AI Shelly - natural language shell assistant" >> "$SHELL_RC"
+    echo "# AI Shelly — natural language shell assistant" >> "$SHELL_RC"
     echo "$SOURCE_LINE" >> "$SHELL_RC"
-    echo "Added source line to $SHELL_RC"
+    echo -e "${GREEN}✓${RESET} Added source line to ${BOLD}$SHELL_RC${RESET}"
 else
-    echo "Source line already in $SHELL_RC (skipped)"
+    echo -e "${DIM}  Source line already in $SHELL_RC (skipped)${RESET}"
 fi
 
-# Set up API key directory
-KEY_DIR="$HOME/.config/ai-shell"
-KEY_FILE="$KEY_DIR/api-key"
-mkdir -p "$KEY_DIR"
+# ──────────────────────────────────────
+# 5. API KEY SETUP (with provider detection)
+# ──────────────────────────────────────
+mkdir -p "$CONFIG_DIR"
 
-if [ ! -f "$KEY_FILE" ]; then
+detect_provider_from_key() {
+    local key="$1"
+    if [[ "$key" == sk-ant-* ]]; then
+        echo "anthropic"
+    elif [[ "$key" == sk-* ]]; then
+        echo "openai"
+    elif [[ "$key" == AI* ]]; then
+        echo "google"
+    else
+        echo "anthropic"
+    fi
+}
+
+default_model_for_provider() {
+    case "$1" in
+        anthropic) echo "claude-haiku-4-5-20251001" ;;
+        openai)    echo "gpt-4o-mini" ;;
+        google)    echo "gemini-2.0-flash" ;;
+        *)         echo "claude-haiku-4-5-20251001" ;;
+    esac
+}
+
+PROVIDER="anthropic"
+MODEL=""
+
+if [ -f "$KEY_FILE" ]; then
+    echo -e "${DIM}  API key already configured.${RESET}"
+    PROVIDER=$(detect_provider_from_key "$(cat "$KEY_FILE")")
+else
     echo ""
-    echo "No API key found."
-    echo "Get one from https://console.anthropic.com/"
-    read -p "Paste your Anthropic API key (or press Enter to skip): " api_key
+    echo -e "${BOLD}API Key Setup${RESET}"
+    echo -e "${DIM}  Supported: Anthropic (sk-ant-...), OpenAI (sk-...), Google (AI...)${RESET}"
+    echo -e "${DIM}  Get one from: https://console.anthropic.com/${RESET}"
+    echo ""
+    read -p "Paste your API key (or press Enter to skip): " api_key
     if [ -n "$api_key" ]; then
         echo "$api_key" > "$KEY_FILE"
         chmod 600 "$KEY_FILE"
-        echo "API key saved to $KEY_FILE"
+        PROVIDER=$(detect_provider_from_key "$api_key")
+        echo -e "${GREEN}✓${RESET} API key saved (detected provider: ${BOLD}$PROVIDER${RESET})"
     else
-        echo "Skipped. Add your key later:"
-        echo "  echo 'sk-ant-...' > $KEY_FILE"
+        echo -e "${YELLOW}  Skipped. Add your key later:${RESET}"
+        echo "    echo 'sk-ant-...' > $KEY_FILE"
     fi
-else
-    echo "API key already configured."
 fi
 
+MODEL=$(default_model_for_provider "$PROVIDER")
+
+# ──────────────────────────────────────
+# 6. FEATURE CONFIGURATION
+# ──────────────────────────────────────
 echo ""
-echo "Done! Restart your shell or run:"
-echo "  source $SHELL_RC"
+echo -e "${BOLD}Feature Configuration${RESET}"
+echo -e "${DIM}  Choose which output features to enable.${RESET}"
+echo -e "${DIM}  You can change these later with: ai config${RESET}"
 echo ""
-echo "Usage:"
-echo "  ai <what you want to do>       # natural language commands"
-echo "  ask                             # interactive mode"
-echo "  <cmd> | ai <question>           # pipe mode"
-echo "  ai recall <search>              # search memory"
-echo "  ai history                      # view history"
-echo "  ai forget                       # wipe memory"
+
+ask_feature() {
+    local name="$1"
+    local desc="$2"
+    local default="$3"
+    local prompt_default="Y/n"
+    [ "$default" = "false" ] && prompt_default="y/N"
+    read -p "  $(printf '%-22s' "$desc") [$prompt_default]: " answer
+    if [ -z "$answer" ]; then
+        echo "$default"
+    elif [[ "$answer" =~ ^[Yy] ]]; then
+        echo "true"
+    else
+        echo "false"
+    fi
+}
+
+FEAT_FUNFACT=$(ask_feature "funfact" "Linux fun facts" "true")
+FEAT_LINUS=$(ask_feature "linus_quotes" "Linus Torvalds quotes" "true")
+FEAT_ASCII=$(ask_feature "ascii_art" "ASCII art" "true")
+FEAT_ROAST=$(ask_feature "roast" "Roast mode 🔥" "false")
+FEAT_SELF_IMPROVE=$(ask_feature "self_improve" "Self-improvement tips" "true")
+
+# ──────────────────────────────────────
+# 7. WRITE CONFIG FILE
+# ──────────────────────────────────────
+jq -n \
+    --arg provider "$PROVIDER" \
+    --arg model "$MODEL" \
+    --argjson funfact "$FEAT_FUNFACT" \
+    --argjson linus_quotes "$FEAT_LINUS" \
+    --argjson ascii_art "$FEAT_ASCII" \
+    --argjson roast "$FEAT_ROAST" \
+    --argjson self_improve "$FEAT_SELF_IMPROVE" \
+    --argjson conv_buffer 3 \
+    --argjson conv_timeout 1800 \
+    '{
+        provider: $provider,
+        model: $model,
+        features: {
+            funfact: $funfact,
+            linus_quotes: $linus_quotes,
+            ascii_art: $ascii_art,
+            roast: $roast,
+            self_improve: $self_improve
+        },
+        conversation: {
+            buffer_size: $conv_buffer,
+            timeout_seconds: $conv_timeout
+        }
+    }' > "$CONFIG_FILE"
+
 echo ""
-echo "Optional: export AI_ROAST=1 to enable roast mode"
+echo -e "${GREEN}✓${RESET} Config saved to ${BOLD}$CONFIG_FILE${RESET}"
+
+# ──────────────────────────────────────
+# 8. SUMMARY
+# ──────────────────────────────────────
+echo ""
+echo -e "${BOLD}╔══════════════════════════════════════╗${RESET}"
+echo -e "${BOLD}║         Installation Complete         ║${RESET}"
+echo -e "${BOLD}╚══════════════════════════════════════╝${RESET}"
+echo ""
+echo -e "  Provider:  ${CYAN}$PROVIDER${RESET}"
+echo -e "  Model:     ${CYAN}$MODEL${RESET}"
+echo -e "  Features:  funfact=$FEAT_FUNFACT  linus=$FEAT_LINUS  ascii=$FEAT_ASCII  roast=$FEAT_ROAST"
+echo ""
+echo -e "  Restart your shell or run:"
+echo -e "    ${YELLOW}source $SHELL_RC${RESET}"
+echo ""
+echo -e "  ${BOLD}Commands:${RESET}"
+echo -e "    ai <what you want>         Natural language → commands"
+echo -e "    ask                        Interactive mode"
+echo -e "    <cmd> | ai <question>      Pipe mode"
+echo -e "    ai config                  View/edit configuration"
+echo -e "    ai model <provider>        Switch AI provider"
+echo -e "    ai recall <search>         Search memory"
+echo -e "    ai history                 View history"
+echo -e "    ai forget                  Wipe memory"
+echo ""
