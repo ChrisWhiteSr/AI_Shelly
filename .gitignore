@@ -5,6 +5,9 @@
 # API key (never commit this)
 .config/ai-shell/
 
+# Claude/VS Code local settings
+.claude/
+
 # OS junk
 .DS_Store
 Thumbs.db

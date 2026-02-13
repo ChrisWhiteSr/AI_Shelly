@@ -320,6 +320,9 @@ function _ai_call_api {
     }
     catch {
         Write-Host "API Error: $($_.Exception.Message)" -ForegroundColor Red
+        if ($_.ErrorDetails.Message) {
+            Write-Host "Details: $($_.ErrorDetails.Message)" -ForegroundColor DarkGray
+        }
         return $null
     }
 }
