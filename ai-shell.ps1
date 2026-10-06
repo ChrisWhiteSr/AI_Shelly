@@ -68,9 +68,11 @@ function _ai_show_config {
     Write-Host "┌─ AI Shelly Configuration ─┐" -ForegroundColor White
     Write-Host ""
     $provider = _ai_load_config "provider" "openai"
-    $model = _ai_load_config "model" "gpt-5-nano-2025-08-07"
+    $model = _ai_load_config "model" (_ai_default_model $provider)
+    $effort = _ai_load_config "reasoning_effort" "none"
     Write-Host "  Provider:     $provider" -ForegroundColor Cyan
     Write-Host "  Model:        $model" -ForegroundColor Cyan
+    Write-Host "  Reasoning:    $effort  ('ai -t' uses medium)" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  Features:" -ForegroundColor White
     foreach ($feat in @("funfact", "linus_quotes", "ascii_art", "roast", "self_improve")) {
@@ -259,72 +261,277 @@ function _ai_conversation_clear {
 # ═══════════════════════════════════════
 
 function _ai_get_api_key {
-    $provider = _ai_load_config "provider" "openai"
-    $providerKeyFile = "$script:AI_CONFIG_DIR\api-key-$provider"
+    param([string]$Provider = (_ai_load_config "provider" "openai"))
+    $providerKeyFile = "$script:AI_CONFIG_DIR\api-key-$Provider"
     $defaultKeyFile = "$script:AI_CONFIG_DIR\api-key"
     if (Test-Path $providerKeyFile) { return (Get-Content $providerKeyFile -Raw).Trim() }
-    if (Test-Path $defaultKeyFile) { return (Get-Content $defaultKeyFile -Raw).Trim() }
+    if (Test-Path $defaultKeyFile) {
+        # The shared api-key file only counts for the provider its prefix belongs to
+        $key = (Get-Content $defaultKeyFile -Raw).Trim()
+        $owner = if ($key.StartsWith("sk-ant-")) { "anthropic" } elseif ($key.StartsWith("sk-")) { "openai" } elseif ($key.StartsWith("AI")) { "google" } else { $Provider }
+        if ($owner -eq $Provider) { return $key }
+    }
+    $envKey = switch ($Provider) {
+        "anthropic" { $env:ANTHROPIC_API_KEY }
+        "google" { if ($env:GEMINI_API_KEY) { $env:GEMINI_API_KEY } else { $env:GOOGLE_API_KEY } }
+        default { $env:OPENAI_API_KEY }
+    }
+    if ($envKey) { return $envKey }
     return $null
 }
 
-function _ai_call_api {
-    param([string]$ApiKey, [string]$SystemPrompt, [array]$Messages, [int]$MaxTokens = 1024)
-    $provider = _ai_load_config "provider" "openai"
-    $model = _ai_load_config "model" "gpt-5-nano-2025-08-07"
+function _ai_default_model {
+    param([string]$Provider)
+    switch ($Provider) {
+        "anthropic" { return "claude-sonnet-5-5" }
+        "google" { return "gemini-flash-latest" }
+        default { return "gpt-6-sol" }
+    }
+}
 
+# POST JSON; returns @{ Resp = <object or $null>; Err = <message or $null> }
+function _ai_post {
+    param([string]$Uri, [hashtable]$Headers, $Body)
     try {
-        switch ($provider) {
-            "anthropic" {
-                $body = @{
-                    model      = $model
-                    max_tokens = $MaxTokens
-                    system     = $SystemPrompt
-                    messages   = @($Messages | ForEach-Object { @{ role = $_.role; content = $_.content } })
-                } | ConvertTo-Json -Depth 5
-                $resp = Invoke-RestMethod -Uri "https://api.anthropic.com/v1/messages" `
-                    -Method Post -ContentType "application/json" `
-                    -Headers @{ "x-api-key" = $ApiKey; "anthropic-version" = "2023-06-01" } `
-                    -Body $body -TimeoutSec 30
-                return $resp.content[0].text
+        $json = $Body | ConvertTo-Json -Depth 8
+        $resp = Invoke-RestMethod -Uri $Uri -Method Post -ContentType "application/json" `
+            -Headers $Headers -Body ([System.Text.Encoding]::UTF8.GetBytes($json)) -TimeoutSec 90
+        return @{ Resp = $resp; Err = $null }
+    }
+    catch {
+        $msg = $_.Exception.Message
+        if ($_.ErrorDetails.Message) {
+            try { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error.message } catch { $msg = $_.ErrorDetails.Message }
+        }
+        return @{ Resp = $null; Err = $msg }
+    }
+}
+
+# Effort levels used here: none (default, fastest), low (fixes), medium (ai -t)
+function _ai_openai_effort {
+    param([string]$Model, [string]$Effort)
+    if ($Model -match '^(gpt-4|gpt-3\.5)' -or $Model -match 'chat-latest') { return $null }
+    if ($Model -match '^gpt-5(-20|-mini|-nano|-codex|$)') { if ($Effort -eq "none") { return "minimal" } else { return $Effort } }
+    if ($Model -match '^(o\d|gpt-6-astra|gpt-6\.1)' -or $Model -match '-pro') { if ($Effort -eq "none") { return "low" } else { return $Effort } }
+    return $Effort
+}
+
+function _ai_call_api {
+    param([string]$ApiKey, [string]$SystemPrompt, [array]$Messages, [string]$Effort = "none", [int]$MaxTokens = 8192)
+    $provider = _ai_load_config "provider" "openai"
+    $model = _ai_load_config "model" (_ai_default_model $provider)
+    $msgs = @($Messages | ForEach-Object { @{ role = $_.role; content = $_.content } })
+
+    switch ($provider) {
+        "anthropic" {
+            $extra = @{}
+            if ($model -match '^claude-(3|haiku-4)' -or $model -match '^claude-.*-4-(5|1|0)' -or $model -match '^claude-.*-4-20') { }
+            elseif ($model -like "claude-sonnet-5-5*") {
+                if ($Effort -eq "none") { $extra = @{ thinking = @{ type = "between_tools" }; output_config = @{ effort = "low" } } }
+                else { $extra = @{ output_config = @{ effort = $Effort } } }
             }
-            "openai" {
-                $allMsgs = @(@{ role = "system"; content = $SystemPrompt })
-                $allMsgs += @($Messages | ForEach-Object { @{ role = $_.role; content = $_.content } })
+            else {
+                $e = if ($Effort -eq "none") { "low" } else { $Effort }
+                $extra = @{ output_config = @{ effort = $e } }
+            }
+            for ($attempt = 0; $attempt -lt 2; $attempt++) {
+                $body = @{ model = $model; max_tokens = $MaxTokens; system = $SystemPrompt; messages = $msgs } + $extra
+                $r = _ai_post "https://api.anthropic.com/v1/messages" @{ "x-api-key" = $ApiKey; "anthropic-version" = "2023-06-01" } $body
+                if ($r.Err -and $extra.Count -gt 0 -and $r.Err -match 'thinking|effort|output_config') { $extra = @{}; continue }
+                break
+            }
+            if ($r.Err) { Write-Host "API Error: $($r.Err)" -ForegroundColor Red; return $null }
+            if ($r.Resp.stop_reason -eq "refusal") { Write-Host "The model declined this request." -ForegroundColor Red; return $null }
+            # Thinking-capable models can return thinking blocks before the text
+            return (@($r.Resp.content | Where-Object { $_.type -eq "text" } | ForEach-Object { $_.text }) -join "")
+        }
+        "google" {
+            $contents = @($msgs | ForEach-Object {
+                    $role = if ($_.role -eq "assistant") { "model" } else { $_.role }
+                    @{ role = $role; parts = @(@{ text = $_.content }) }
+                })
+            $thinking = $null
+            if ($model -like "gemini-2.5-flash*") {
+                $thinking = @{ thinkingBudget = $(switch ($Effort) { "none" { 0 } "low" { 1024 } default { 4096 } }) }
+            }
+            elseif ($model -notmatch '^gemini-[12]') {
+                $thinking = @{ thinkingLevel = $(if ($Effort -eq "none") { "minimal" } else { $Effort }) }
+            }
+            for ($attempt = 0; $attempt -lt 2; $attempt++) {
+                $gen = @{ maxOutputTokens = $MaxTokens; responseMimeType = "application/json" }
+                if ($thinking) { $gen.thinkingConfig = $thinking }
+                $body = @{ contents = $contents; systemInstruction = @{ parts = @(@{ text = $SystemPrompt }) }; generationConfig = $gen }
+                $r = _ai_post "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent" @{ "x-goog-api-key" = $ApiKey } $body
+                if ($r.Err -and $thinking -and $r.Err -match 'hinking') { $thinking = $null; continue }
+                break
+            }
+            if ($r.Err) { Write-Host "API Error: $($r.Err)" -ForegroundColor Red; return $null }
+            return (@($r.Resp.candidates[0].content.parts | Where-Object { -not $_.thought } | ForEach-Object { $_.text }) -join "")
+        }
+        default {
+            $effortVal = _ai_openai_effort $model $Effort
+            $allMsgs = @(@{ role = "system"; content = $SystemPrompt }) + $msgs
+            for ($attempt = 0; $attempt -lt 2; $attempt++) {
                 $body = @{
                     model                 = $model
                     max_completion_tokens = $MaxTokens
                     messages              = $allMsgs
-                } | ConvertTo-Json -Depth 5
-                $resp = Invoke-RestMethod -Uri "https://api.openai.com/v1/chat/completions" `
-                    -Method Post -ContentType "application/json" `
-                    -Headers @{ "Authorization" = "Bearer $ApiKey" } `
-                    -Body $body -TimeoutSec 30
-                return $resp.choices[0].message.content
+                    response_format       = @{ type = "json_object" }
+                }
+                if ($effortVal) { $body.reasoning_effort = $effortVal }
+                $r = _ai_post "https://api.openai.com/v1/chat/completions" @{ "Authorization" = "Bearer $ApiKey" } $body
+                # Self-heal when the model rejects the effort level: use the lowest one it supports
+                if ($r.Err -and $r.Err -match 'reasoning_effort') {
+                    $effortVal = if ($r.Err -match "Supported values are: '([a-z]+)'") { $Matches[1] } else { $null }
+                    continue
+                }
+                break
+            }
+            if ($r.Err) { Write-Host "API Error: $($r.Err)" -ForegroundColor Red; return $null }
+            return $r.Resp.choices[0].message.content
+        }
+    }
+}
+
+# Pull a JSON object out of model text (handles fences and chatter)
+function _ai_parse_json {
+    param([string]$Text)
+    if (-not $Text) { return $null }
+    try { return ($Text | ConvertFrom-Json) } catch {}
+    $start = $Text.IndexOf('{'); $end = $Text.LastIndexOf('}')
+    if ($start -lt 0 -or $end -le $start) { return $null }
+    try { return ($Text.Substring($start, $end - $start + 1) | ConvertFrom-Json) } catch { return $null }
+}
+
+function _ai_list_models {
+    param([string]$Provider, [string]$ApiKey)
+    try {
+        switch ($Provider) {
+            "anthropic" {
+                (Invoke-RestMethod "https://api.anthropic.com/v1/models?limit=100" -Headers @{ "x-api-key" = $ApiKey; "anthropic-version" = "2023-06-01" }).data.id
             }
             "google" {
-                $contents = @($Messages | ForEach-Object {
-                        $r = if ($_.role -eq "assistant") { "model" } else { $_.role }
-                        @{ role = $r; parts = @(@{ text = $_.content }) }
-                    })
-                $body = @{
-                    contents          = $contents
-                    systemInstruction = @{ parts = @(@{ text = $SystemPrompt }) }
-                    generationConfig  = @{ maxOutputTokens = $MaxTokens }
-                } | ConvertTo-Json -Depth 6
-                $resp = Invoke-RestMethod -Uri "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${ApiKey}" `
-                    -Method Post -ContentType "application/json" `
-                    -Body $body -TimeoutSec 30
-                return $resp.candidates[0].content.parts[0].text
+                (Invoke-RestMethod "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200" -Headers @{ "x-goog-api-key" = $ApiKey }).models |
+                Where-Object { $_.supportedGenerationMethods -contains "generateContent" -and $_.name -match '^models/gemini' -and $_.name -notmatch 'image|tts|audio|embedding|live' } |
+                ForEach-Object { $_.name -replace '^models/', '' } | Sort-Object
+            }
+            default {
+                (Invoke-RestMethod "https://api.openai.com/v1/models" -Headers @{ "Authorization" = "Bearer $ApiKey" }).data.id |
+                Where-Object { $_ -match '^(gpt-[4-9]|o\d)' -and $_ -notmatch 'audio|realtime|tts|transcribe|image|search|instruct|codex|live|-\d{4}-\d{2}-\d{2}$' } | Sort-Object
             }
         }
     }
-    catch {
-        Write-Host "API Error: $($_.Exception.Message)" -ForegroundColor Red
-        if ($_.ErrorDetails.Message) {
-            Write-Host "Details: $($_.ErrorDetails.Message)" -ForegroundColor DarkGray
-        }
-        return $null
+    catch { Write-Host "Could not list models: $($_.Exception.Message)" -ForegroundColor Red }
+}
+
+# Local backstop in case the model under-reports risk
+function _ai_looks_destructive {
+    param([string]$Cmd)
+    return ($Cmd -match '(Remove-Item|\brm\b|\bdel\b|\brd\b|rmdir).*-(Recurse|Force|r\b|rf\b)|Format-Volume|Clear-Disk|Initialize-Disk|Remove-Partition|\bformat\s+[a-z]:|diskpart|Stop-Computer|Restart-Computer|git\s+(reset\s+--hard|clean\s+-[a-z]*f|push\s.*--force)')
+}
+
+# Price ($ per 1M tokens in/out) and a hint, for models we know about (checked 2026-10)
+function _ai_model_note {
+    param([string]$Model)
+    $notes = @{
+        "gpt-6.1-sol"       = @('$2/$10', 'always reasons: smartest Sol, ~3x slower')
+        "gpt-6-sol"         = @('$2/$10', 'smart + fast (recommended)')
+        "gpt-6-luna"        = @('$0.10/$0.50', 'fast, ~20x cheaper')
+        "gpt-6-astra"       = @('$10/$50', 'flagship, always reasons (slow)')
+        "gpt-5.6-sol"       = @('$5/$30', '')
+        "gpt-5.6-terra"     = @('$2/$12', '')
+        "gpt-5.6-luna"      = @('$0.20/$1.20', '')
+        "gpt-5.4-mini"      = @('$0.75/$4.50', 'fastest, older')
+        "claude-sonnet-5-5" = @('$2/$10', 'smart, thinking off (recommended)')
+        "claude-opus-5-5"   = @('$4/$20', 'always thinks (slower)')
+        "claude-fable-5-1"  = @('$10/$50', 'most capable, always thinks (slow)')
+        "claude-fable-5"    = @('$10/$50', 'most capable, always thinks (slow)')
+        "claude-opus-5"     = @('$5/$25', '')
+        "claude-sonnet-5"   = @('$2/$10', '')
+        "claude-haiku-4-5"  = @('$1/$5', 'fastest Claude')
     }
+    if ($notes.ContainsKey($Model)) { return $notes[$Model] }
+    return @('', '')
+}
+
+# Newest chat models for a provider, newest first. Cached for a day.
+function _ai_recent_models {
+    param([string]$Provider, [int]$N = 6, [switch]$Refresh)
+    $cache = "$script:AI_CACHE_DIR\models-$Provider.txt"
+    $stale = -not (Test-Path $cache) -or ((Get-Item $cache).LastWriteTime -lt (Get-Date).AddDays(-1))
+    if ($Refresh -or $stale) {
+        $key = _ai_get_api_key $Provider
+        if (-not $key) { return @() }
+        try {
+            $list = switch ($Provider) {
+                "anthropic" {
+                    (Invoke-RestMethod "https://api.anthropic.com/v1/models?limit=100" -Headers @{ "x-api-key" = $key; "anthropic-version" = "2023-06-01" }).data |
+                    Sort-Object created_at -Descending | ForEach-Object { $_.id }
+                }
+                "openai" {
+                    (Invoke-RestMethod "https://api.openai.com/v1/models" -Headers @{ "Authorization" = "Bearer $key" }).data |
+                    Sort-Object created -Descending | ForEach-Object { $_.id } |
+                    Where-Object { $_ -match '^(gpt-[4-9]|o\d)' -and $_ -notmatch 'pro|codex|audio|realtime|tts|transcribe|image|search|instruct|live|chat-latest|-\d{4}-\d{2}-\d{2}$' }
+                }
+                default { _ai_list_models $Provider $key | Sort-Object -Descending }
+            }
+        }
+        catch { return @() }
+        if (-not $list) { return @() }
+        if (-not (Test-Path $script:AI_CACHE_DIR)) { New-Item -ItemType Directory -Path $script:AI_CACHE_DIR -Force | Out-Null }
+        $list | Set-Content $cache
+    }
+    return @(Get-Content $cache | Select-Object -First $N)
+}
+
+# Interactive model picker across providers (Alt+M, or `ai model` with no arguments)
+function _ai_pick_model {
+    param([switch]$Refresh)
+    $curP = _ai_load_config "provider" "openai"
+    $curM = _ai_load_config "model" (_ai_default_model $curP)
+    $entries = @()
+    Write-Host ""
+    Write-Host "Switch model  (current: $curP/$curM)" -ForegroundColor White
+    foreach ($p in @("openai", "anthropic", "google")) {
+        if (-not (_ai_get_api_key $p)) {
+            if ($p -ne "google") { Write-Host "`n  ${p}: no key (save one to $script:AI_CONFIG_DIR\api-key-$p)" -ForegroundColor DarkGray }
+            continue
+        }
+        $list = @(_ai_recent_models $p 6 -Refresh:$Refresh)
+        if ($p -eq $curP -and $list -notcontains $curM) { $list += $curM }
+        if ($list.Count -eq 0) { Write-Host "`n  ${p}: could not fetch models" -ForegroundColor Red; continue }
+        Write-Host "`n  $p (newest first)" -ForegroundColor Cyan
+        foreach ($m in $list) {
+            $entries += [PSCustomObject]@{ Provider = $p; Model = $m }
+            $mark = if ($p -eq $curP -and $m -eq $curM) { "●" } else { " " }
+            $note = _ai_model_note $m
+            Write-Host ("  {0} {1,2}  {2,-20} " -f $mark, $entries.Count, $m) -NoNewline
+            Write-Host ("{0,-13} {1}" -f $note[0], $note[1]) -ForegroundColor DarkGray
+        }
+    }
+    Write-Host ""
+    $choice = Read-Host "Number, a model id, r to refresh, Enter to cancel"
+    if (-not $choice) { Write-Host "Unchanged."; return }
+    if ($choice -eq "r") { _ai_pick_model -Refresh; return }
+    if ($choice -match '^\d+$' -and [int]$choice -ge 1 -and [int]$choice -le $entries.Count) {
+        $newP = $entries[[int]$choice - 1].Provider; $newM = $entries[[int]$choice - 1].Model
+    }
+    else {
+        $newM = $choice
+        $newP = if ($newM -like "claude-*") { "anthropic" } elseif ($newM -like "gemini-*") { "google" } elseif ($newM -match '^(gpt-|o\d)') { "openai" } else { $null }
+        if (-not $newP) { Write-Host "Not a number on the list or a known model id." -ForegroundColor Red; return }
+    }
+    _ai_set_config "provider" $newP
+    _ai_set_config "model" $newM
+    Write-Host "✓ Now using $newP/$newM" -ForegroundColor Green
+}
+
+# Last line of every answer: response time, model, how to switch
+function _ai_footer {
+    param([double]$Seconds, [string]$Provider, [string]$Model, [string]$Effort)
+    $think = if ($Effort -ne "none") { " · reasoning: $Effort" } else { "" }
+    Write-Host ""
+    Write-Host ("⏱ {0:N1}s · {1}/{2}{3} · Alt+M to switch model" -f $Seconds, $Provider, $Model, $think) -ForegroundColor DarkGray
 }
 
 # ═══════════════════════════════════════
@@ -349,62 +556,76 @@ function ai {
             }
             "model" {
                 $curProvider = _ai_load_config "provider" "openai"
-                $curModel = _ai_load_config "model" "gpt-5-nano-2025-08-07"
+                $curModel = _ai_load_config "model" (_ai_default_model $curProvider)
 
-                # Helper: show available models for a provider
+                # Curated picks (checked 2026-10). `ai models` lists everything your key can use.
                 $showModels = {
                     param([string]$prov)
                     Write-Host ""
                     switch ($prov) {
                         "openai" {
-                            Write-Host "  Available OpenAI models:" -ForegroundColor White
-                            Write-Host "    gpt-5-nano          `$0.05/1M in   — ultra-cheap, fastest" -ForegroundColor Green
-                            Write-Host "    gpt-5-mini          `$0.25/1M in   — fast, affordable" -ForegroundColor White
-                            Write-Host "    gpt-5.1             `$1.25/1M in   — balanced" -ForegroundColor White
-                            Write-Host "    gpt-5.2             `$1.75/1M in   — premium reasoning" -ForegroundColor White
+                            Write-Host "  Recommended OpenAI models (`$ per 1M tokens in/out):" -ForegroundColor White
+                            Write-Host "    gpt-6-sol           `$2.00/`$10.00  — smart + fast with reasoning off (default)" -ForegroundColor Green
+                            Write-Host "    gpt-6-luna          `$0.10/`$0.50   — nearly as fast, ~20x cheaper" -ForegroundColor White
+                            Write-Host "    gpt-5.4-mini        `$0.75/`$4.50   — fastest in testing, older generation" -ForegroundColor White
+                            Write-Host "    gpt-6.1-sol         `$2.00/`$10.00  — always reasons: smarter, ~3x slower" -ForegroundColor White
                         }
                         "anthropic" {
-                            Write-Host "  Available Anthropic models:" -ForegroundColor White
-                            Write-Host "    claude-haiku-4-5    `$1.00/1M in   — fast, cheapest" -ForegroundColor Green
-                            Write-Host "    claude-sonnet-4-5   `$3.00/1M in   — balanced" -ForegroundColor White
-                            Write-Host "    claude-opus-4-5     `$5.00/1M in   — most capable" -ForegroundColor White
+                            Write-Host "  Recommended Anthropic models (`$ per 1M tokens in/out):" -ForegroundColor White
+                            Write-Host "    claude-sonnet-5-5   `$2.00/`$10.00  — smart, thinking off for speed (default)" -ForegroundColor Green
+                            Write-Host "    claude-haiku-4-5    `$1.00/`$5.00   — fastest, cheapest" -ForegroundColor White
+                            Write-Host "    claude-opus-5-5     `$4.00/`$20.00  — most capable Opus, always thinks (slower)" -ForegroundColor White
                         }
                         "google" {
-                            Write-Host "  Available Google models:" -ForegroundColor White
-                            Write-Host "    gemini-3-flash      `$0.50/1M in   — latest gen, fast" -ForegroundColor Green
-                            Write-Host "    gemini-2.5-flash    `$0.30/1M in   — stable workhorse" -ForegroundColor White
-                            Write-Host "    gemini-2.5-flash-lite `$0.10/1M in — ultra-cheap" -ForegroundColor White
-                            Write-Host "    gemini-2.5-pro      `$1.25/1M in   — most capable" -ForegroundColor White
+                            Write-Host "  Recommended Google models:" -ForegroundColor White
+                            Write-Host "    gemini-flash-latest       — alias for Google's newest Flash (default)" -ForegroundColor Green
+                            Write-Host "    gemini-flash-lite-latest  — alias for the newest Flash-Lite (cheapest)" -ForegroundColor White
+                            Write-Host "    Run 'ai models google' for pinned version IDs." -ForegroundColor DarkGray
                         }
                     }
                     Write-Host ""
                 }
 
+                if ($Args.Count -lt 2 -and -not [Console]::IsOutputRedirected) {
+                    _ai_pick_model
+                    return
+                }
                 if ($Args.Count -lt 2) {
-                    # No args — show current + all available
+                    # No args — show current + recommended
                     Write-Host "Current: $curProvider / $curModel" -ForegroundColor Cyan
                     & $showModels $curProvider
                     Write-Host "  Usage:" -ForegroundColor DarkGray
                     Write-Host "    ai model <provider>          — switch provider (use default model)" -ForegroundColor DarkGray
                     Write-Host "    ai model <provider> <model>  — switch to specific model" -ForegroundColor DarkGray
+                    Write-Host "    ai models [provider]         — list every model your key can use" -ForegroundColor DarkGray
                     Write-Host "    Providers: openai, anthropic, google" -ForegroundColor DarkGray
                     return
                 }
                 $newProvider = $Args[1]
                 $newModel = if ($Args.Count -ge 3) { $Args[2] } else { $null }
-                $defaults = @{ anthropic = "claude-haiku-4-5-20251001"; openai = "gpt-5-nano-2025-08-07"; google = "gemini-3.0-flash" }
-                if (-not $defaults.ContainsKey($newProvider)) {
+                if (@("openai", "anthropic", "google") -notcontains $newProvider) {
                     Write-Host "Unknown provider: $newProvider (use: openai, anthropic, google)" -ForegroundColor Red
                     return
                 }
                 if (-not $newModel) {
-                    $newModel = $defaults[$newProvider]
+                    $newModel = _ai_default_model $newProvider
                     & $showModels $newProvider
                     Write-Host "  Defaulting to: $newModel" -ForegroundColor DarkGray
                 }
                 _ai_set_config "provider" $newProvider
                 _ai_set_config "model" $newModel
                 Write-Host "✓ Switched to $newProvider / $newModel" -ForegroundColor Green
+                if (-not (_ai_get_api_key $newProvider)) {
+                    Write-Host "  No key found. Save one to $script:AI_CONFIG_DIR\api-key-$newProvider" -ForegroundColor Yellow
+                }
+                return
+            }
+            "models" {
+                $p = if ($Args.Count -ge 2) { $Args[1] } else { _ai_load_config "provider" "openai" }
+                $k = _ai_get_api_key $p
+                if (-not $k) { Write-Host "No API key for $p." -ForegroundColor Red; return }
+                Write-Host "Models available to your $p key:" -ForegroundColor Cyan
+                _ai_list_models $p $k | Format-Wide -Column 4 -Property { $_ }
                 return
             }
             "recall" {
@@ -428,10 +649,19 @@ function ai {
         }
     }
 
+    # ── Think harder for this one query ──
+    $effort = _ai_load_config "reasoning_effort" "none"
+    if ($Args.Count -ge 1 -and ($Args[0] -eq "-t" -or $Args[0] -eq "--think")) {
+        $effort = "medium"
+        $query = ($Args | Select-Object -Skip 1) -join " "
+    }
+
     if (-not $query -or $query.Trim() -eq "") {
         Write-Host "Usage: ai <what you want to do>"
+        Write-Host "       ai -t <question>            -- think harder (slower, smarter)"
         Write-Host "       ai config                  -- view/edit configuration"
-        Write-Host "       ai model <provider>         -- switch AI provider"
+        Write-Host "       ai model <provider> [model] -- switch AI provider/model"
+        Write-Host "       ai models [provider]        -- list models your key can use"
         Write-Host "       ai history                  -- show recent history"
         Write-Host "       ai forget                   -- wipe memory"
         return
@@ -440,7 +670,7 @@ function ai {
     # ── Load API key ──
     $apiKey = _ai_get_api_key
     if (-not $apiKey) {
-        Write-Host "Error: No API key found. Run install.ps1 first." -ForegroundColor Red
+        Write-Host "Error: No API key found for $(_ai_load_config "provider" "openai"). Run install.ps1 first." -ForegroundColor Red
         return
     }
 
@@ -452,36 +682,43 @@ function ai {
     # ── Build feature instructions ──
     $featureInstr = ""
     if (_ai_feature_enabled "funfact") { $featureInstr += ', "funfact": "one interesting fact about the commands or topic"' }
-    if (_ai_feature_enabled "linus_quotes") { $featureInstr += ', "linus": "a real Linus Torvalds quote, relevant if possible"' }
+    if (_ai_feature_enabled "linus_quotes") { $featureInstr += ', "linus": "a real Linus Torvalds quote, relevant if possible (quote text only, no attribution)"' }
     if (_ai_feature_enabled "roast") { $featureInstr += ', "roast": "absolutely DESTROY the user for needing AI help. Be unhinged, no mercy."' }
 
-    # ── System prompt ──
+    # ── System prompt (stable instructions first, per-query context last so providers can cache the prefix) ──
     $systemPrompt = @"
-You are a versatile shell assistant for PowerShell on Windows. You can BOTH execute commands AND have normal conversations.
+You are an expert shell assistant for PowerShell on Windows. You can BOTH produce commands AND have normal conversations.
 
 INTENT DETECTION:
 MODE "command" — user wants to DO something (install, find, list, modify, run)
 MODE "chat" — user wants an ANSWER or EXPLANATION (what is, how does, explain, why, follow-up questions)
 
-SYSTEM CONTEXT:
-$context
-
-CURRENT DIRECTORY: $cwd
-
-${memory}RESPONSE FORMAT — respond with ONLY a JSON object (no markdown fences):
+RESPONSE FORMAT — respond with ONLY a JSON object:
 
 For MODE "command":
-{"mode": "command", "options": [{"command": "first approach", "label": "short description"}, {"command": "second approach", "label": "short description"}, {"command": "third approach", "label": "short description"}], "explanation": "one sentence"$featureInstr}
+{"mode": "command", "options": [{"command": "best approach", "label": "short description", "risk": "safe|caution|danger"}, {"command": "second approach", "label": "...", "risk": "..."}, {"command": "third approach", "label": "...", "risk": "..."}], "explanation": "one sentence"$featureInstr}
 
 For MODE "chat":
 {"mode": "chat", "answer": "your conversational response"$featureInstr}
 
 RULES:
 - This is POWERSHELL on WINDOWS. Use PowerShell commands (Get-ChildItem, etc), NOT bash/linux commands.
-- In command mode, provide exactly 3 PowerShell-native options.
-- In chat mode, give helpful natural answers without forcing commands.
+- In command mode, provide 3 genuinely different PowerShell-native options, best first, that work as-is for this PowerShell version.
+- risk: "safe" = read-only or trivially reversible; "caution" = changes state (installs, edits, restarts); "danger" = deletes data, wipes disks, or is hard to undo.
+- In chat mode, give helpful, natural, concise answers without forcing commands.
+- Output is printed raw in a terminal: no Markdown bold, italics or headers (backticks around commands are fine).
 - Prefer safe, non-destructive commands. Warn for destructive operations.
 - Keep command-mode explanations to one sentence.
+
+SYSTEM CONTEXT:
+$context
+
+CURRENT CONTEXT:
+Date: $(Get-Date -Format "yyyy-MM-dd HH:mm")
+Current directory: $cwd
+Directory contents (first 40): $((Get-ChildItem -Force -ErrorAction SilentlyContinue | Select-Object -First 40 | ForEach-Object { if ($_.PSIsContainer) { "$($_.Name)\" } else { $_.Name } }) -join ' ')
+
+${memory}
 "@
 
     Write-Host "Thinking..." -ForegroundColor DarkGray
@@ -492,23 +729,24 @@ RULES:
     if ($messages.Count -eq 0) { $messages = @([PSCustomObject]@{ role = "user"; content = $query }) }
 
     # ── API call ──
-    $text = _ai_call_api -ApiKey $apiKey -SystemPrompt $systemPrompt -Messages $messages -MaxTokens 1024
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    $text = _ai_call_api -ApiKey $apiKey -SystemPrompt $systemPrompt -Messages $messages -Effort $effort
+    $timer.Stop()
+    $footer = { _ai_footer $timer.Elapsed.TotalSeconds (_ai_load_config "provider" "openai") (_ai_load_config "model" "") $effort }
 
     if (-not $text) {
         Write-Host "Error: No response from API" -ForegroundColor Red
         return
     }
 
-    # Strip markdown fences
-    if ($text -match '(?s)```(?:json)?\s*(.+?)```') { $text = $Matches[1].Trim() }
-
-    try { $parsed = $text | ConvertFrom-Json } catch {
+    $parsed = _ai_parse_json $text
+    if (-not $parsed) {
         Write-Host "Error: Invalid JSON response" -ForegroundColor Red
         Write-Host $text
         return
     }
 
-    _ai_conversation_add "assistant" $text
+    _ai_conversation_add "assistant" ($parsed | ConvertTo-Json -Depth 5 -Compress)
 
     # Clear "Thinking..." — move cursor up
     Write-Host "`e[1A`e[2K" -NoNewline
@@ -528,27 +766,39 @@ RULES:
     # ══════════════════════════════════
     else {
         $explanation = $parsed.explanation
-        if (-not $explanation) {
-            Write-Host "Error: Response missing explanation." -ForegroundColor Red
+        $options = @($parsed.options | Where-Object { $_.command } | Select-Object -First 3)
+        if (-not $explanation -and $options.Count -eq 0) {
+            Write-Host "Error: Response had no explanation or commands." -ForegroundColor Red
             return
         }
 
-        Write-Host "→ $explanation" -ForegroundColor Cyan
+        if ($explanation) { Write-Host "→ $explanation" -ForegroundColor Cyan }
         Write-Host ""
 
-        $options = $parsed.options
-        if ($options -and $options.Count -gt 0) {
+        if ($options.Count -gt 0) {
             $colors = @("Green", "Blue", "Magenta")
-            for ($i = 0; $i -lt [Math]::Min($options.Count, 3); $i++) {
-                Write-Host "  [$($i+1)] $($options[$i].label)" -ForegroundColor $colors[$i]
+            $risks = @()
+            for ($i = 0; $i -lt $options.Count; $i++) {
+                $risk = if ($options[$i].risk) { "$($options[$i].risk)" } else { "safe" }
+                if (_ai_looks_destructive $options[$i].command) { $risk = "danger" }
+                $risks += $risk
+                Write-Host "  [$($i+1)] $($options[$i].label)" -ForegroundColor $colors[$i] -NoNewline
+                if ($risk -eq "danger") { Write-Host "  ⚠ destructive" -ForegroundColor Red }
+                elseif ($risk -eq "caution") { Write-Host "  (changes system)" -ForegroundColor DarkYellow }
+                else { Write-Host "" }
                 Write-Host "      `$ $($options[$i].command)" -ForegroundColor Yellow
             }
             Write-Host ""
 
-            $choice = Read-Host "Pick [1/2/3] or q to cancel"
-            if ($choice -match '^[123]$') {
+            $range = if ($options.Count -ge 2) { "1-$($options.Count)" } else { "1" }
+            $choice = Read-Host "Pick [$range] or q to cancel"
+            if ($choice -match '^\d+$' -and [int]$choice -ge 1 -and [int]$choice -le $options.Count) {
                 $idx = [int]$choice - 1
                 $selectedCmd = $options[$idx].command
+                if ($risks[$idx] -eq "danger") {
+                    $confirm = Read-Host "This can destroy data. Type 'yes' to run it"
+                    if ($confirm -ne "yes") { Write-Host "Cancelled."; & $footer; return }
+                }
                 Write-Host ""
                 Write-Host "  `$ $selectedCmd" -ForegroundColor Yellow
                 Write-Host ""
@@ -565,6 +815,7 @@ RULES:
             }
             else {
                 Write-Host "Cancelled."
+                & $footer
                 return
             }
         }
@@ -588,6 +839,8 @@ RULES:
         Write-Host ""
         Write-Host (_ai_random_art) -ForegroundColor DarkGray
     }
+
+    & $footer
 }
 
 function ask {
@@ -595,4 +848,13 @@ function ask {
     $rawQuery = Read-Host
     if (-not $rawQuery) { Write-Host "No query entered."; return }
     ai $rawQuery
+}
+
+# Alt+M opens the model picker
+if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
+    Set-PSReadLineKeyHandler -Chord Alt+m -Description "AI Shelly: switch model" -ScriptBlock {
+        Write-Host ""
+        _ai_pick_model
+        [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
+    }
 }

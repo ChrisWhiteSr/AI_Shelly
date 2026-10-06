@@ -11,6 +11,165 @@ AI_MEMORY_INDEX="$AI_MEMORY_DIR/chunks.jsonl"
 AI_CONVERSATION_FILE="$AI_CACHE_DIR/conversation.json"
 AI_SHELL_SOURCE="$HOME/.ai-shell.sh"
 
+AI_DEFAULT_PROVIDER="openai"
+
+# ═══════════════════════════════════════
+# MODEL CATALOG
+# ═══════════════════════════════════════
+
+_ai_default_model() {
+    case "$1" in
+        openai)    echo "gpt-6-sol" ;;
+        anthropic) echo "claude-sonnet-5-5" ;;
+        google)    echo "gemini-flash-latest" ;;
+        *)         echo "gpt-6-sol" ;;
+    esac
+}
+
+# Curated picks (checked 2026-10). `ai models` lists everything your key can use.
+_ai_show_models() {
+    local prov="$1"
+    echo ""
+    case "$prov" in
+        openai)
+            echo -e "  Recommended OpenAI models (\$ per 1M tokens in/out):"
+            echo -e "    \033[0;32mgpt-6-sol\033[0m           \$2.00/\$10.00  — smart + fast with reasoning off (default)"
+            echo -e "    gpt-6-luna          \$0.10/\$0.50   — nearly as fast, ~20x cheaper"
+            echo -e "    gpt-5.4-mini        \$0.75/\$4.50   — fastest in testing, older generation"
+            echo -e "    gpt-6.1-sol         \$2.00/\$10.00  — always reasons: smarter, ~3x slower"
+            ;;
+        anthropic)
+            echo -e "  Recommended Anthropic models (\$ per 1M tokens in/out):"
+            echo -e "    \033[0;32mclaude-sonnet-5-5\033[0m   \$2.00/\$10.00  — smart, thinking off for speed (default)"
+            echo -e "    claude-haiku-4-5    \$1.00/\$5.00   — fastest, cheapest"
+            echo -e "    claude-opus-5-5     \$4.00/\$20.00  — most capable Opus, always thinks (slower)"
+            ;;
+        google)
+            echo -e "  Recommended Google models:"
+            echo -e "    \033[0;32mgemini-flash-latest\033[0m       — alias for Google's newest Flash (default)"
+            echo -e "    gemini-flash-lite-latest  — alias for the newest Flash-Lite (cheapest)"
+            echo -e "    \033[0;90mRun 'ai models google' for pinned version IDs.\033[0m"
+            ;;
+    esac
+    echo ""
+}
+
+# Price ($ per 1M tokens in/out) and a hint, for models we know about (checked 2026-10)
+_ai_model_note() {
+    case "$1" in
+        gpt-6.1-sol)        echo "\$2/\$10|always reasons: smartest Sol, ~3x slower" ;;
+        gpt-6-sol)          echo "\$2/\$10|smart + fast (recommended)" ;;
+        gpt-6-luna)         echo "\$0.10/\$0.50|fast, ~20x cheaper" ;;
+        gpt-6-astra)        echo "\$10/\$50|flagship, always reasons (slow)" ;;
+        gpt-5.6-sol)        echo "\$5/\$30" ;;
+        gpt-5.6-terra)      echo "\$2/\$12" ;;
+        gpt-5.6-luna)       echo "\$0.20/\$1.20" ;;
+        gpt-5.4-mini)       echo "\$0.75/\$4.50|fastest, older" ;;
+        claude-sonnet-5-5)  echo "\$2/\$10|smart, thinking off (recommended)" ;;
+        claude-opus-5-5)    echo "\$4/\$20|always thinks (slower)" ;;
+        claude-fable-5-1|claude-fable-5) echo "\$10/\$50|most capable, always thinks (slow)" ;;
+        claude-opus-5|claude-opus-4-[678]) echo "\$5/\$25" ;;
+        claude-sonnet-5)    echo "\$2/\$10" ;;
+        claude-sonnet-4-6)  echo "\$3/\$15" ;;
+        claude-haiku-4-5*)  echo "\$1/\$5|fastest Claude" ;;
+    esac
+}
+
+# Newest chat models for a provider, newest first. Cached for a day; pass "refresh" to refetch.
+_ai_recent_models() {
+    local provider="$1" n="${2:-6}" refresh="$3"
+    local cache="$AI_CACHE_DIR/models-$provider.txt"
+    if [ "$refresh" = "refresh" ] || [ ! -s "$cache" ] || [ -n "$(find "$cache" -mmin +1440 2>/dev/null)" ]; then
+        local key=$(_ai_get_api_key "$provider")
+        [ -z "$key" ] && return 1
+        mkdir -p "$AI_CACHE_DIR"
+        local list
+        case "$provider" in
+            anthropic)
+                list=$(curl -s --max-time 15 "https://api.anthropic.com/v1/models?limit=100" \
+                    -H @<(printf 'x-api-key: %s\n' "$key") -H "anthropic-version: 2023-06-01" \
+                    | jq -r '.data // [] | sort_by(.created_at) | reverse | .[].id' 2>/dev/null) ;;
+            openai)
+                # Only models that work on chat completions: no pro/codex/audio/etc, no dated snapshots
+                list=$(curl -s --max-time 15 https://api.openai.com/v1/models \
+                    -H @<(printf 'Authorization: Bearer %s\n' "$key") \
+                    | jq -r '.data // [] | sort_by(-.created) | .[].id' 2>/dev/null \
+                    | grep -E '^(gpt-[4-9]|o[0-9])' \
+                    | grep -vE 'pro|codex|audio|realtime|tts|transcribe|image|search|instruct|live|chat-latest|-[0-9]{4}-[0-9]{2}-[0-9]{2}$') ;;
+            google)
+                list=$(_ai_list_models google "$key" | sort -rV) ;;
+        esac
+        [ -z "$list" ] && return 1
+        echo "$list" > "$cache"
+    fi
+    head -n "$n" "$cache"
+}
+
+# Interactive model picker across providers (Alt+M, or `ai model` with no arguments)
+_ai_pick_model() {
+    local refresh="$1"
+    local cur_p=$(_ai_load_config ".provider" "$AI_DEFAULT_PROVIDER")
+    local cur_m=$(_ai_load_config ".model" "$(_ai_default_model "$cur_p")")
+    local -a provs=() models=()
+    local p m i=0 shown_current=0
+
+    echo ""
+    echo -e "\033[1mSwitch model\033[0m  \033[0;90m(current: $cur_p/$cur_m)\033[0m"
+    for p in openai anthropic google; do
+        if [ -z "$(_ai_get_api_key "$p")" ]; then
+            [ "$p" != "google" ] && echo -e "\n  \033[0;90m$p: no key (save one to $AI_CONFIG_DIR/api-key-$p)\033[0m"
+            continue
+        fi
+        local list=$(_ai_recent_models "$p" 6 "$refresh")
+        # Keep the current model visible even if it isn't among the newest
+        if [ "$p" = "$cur_p" ] && ! grep -qxF "$cur_m" <<< "$list"; then
+            list+=$'\n'"$cur_m"
+        fi
+        [ -z "$list" ] && { echo -e "\n  \033[0;31m$p: could not fetch models\033[0m"; continue; }
+        echo -e "\n  \033[1;36m$p\033[0m \033[0;90m(newest first)\033[0m"
+        while IFS= read -r m; do
+            [ -z "$m" ] && continue
+            provs+=("$p"); models+=("$m"); i=$((i + 1))
+            local mark="  "
+            [ "$p" = "$cur_p" ] && [ "$m" = "$cur_m" ] && mark="\033[0;32m●\033[0m "
+            local note=$(_ai_model_note "$m")
+            printf "  %b\033[1m%2d\033[0m  %-20s \033[0;90m%-13s %s\033[0m\n" "$mark" "$i" "$m" "${note%%|*}" "$([[ "$note" == *"|"* ]] && echo "${note#*|}")"
+        done <<< "$list"
+    done
+    echo ""
+    local choice
+    read -r -p "Number, a model id, r to refresh, Enter to cancel: " choice < /dev/tty
+    case "$choice" in
+        "") echo "Unchanged."; return 0 ;;
+        r|R) _ai_pick_model refresh; return ;;
+    esac
+    local new_p="" new_m=""
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$i" ]; then
+        new_p="${provs[$((choice - 1))]}"; new_m="${models[$((choice - 1))]}"
+    else
+        new_m="$choice"
+        case "$new_m" in
+            claude-*) new_p="anthropic" ;;
+            gemini-*) new_p="google" ;;
+            gpt-*|o[0-9]*) new_p="openai" ;;
+            *) echo "Not a number on the list or a known model id."; return 1 ;;
+        esac
+    fi
+    _ai_set_config ".provider" "\"$new_p\""
+    _ai_set_config ".model" "\"$new_m\""
+    echo -e "\033[0;32m✓ Now using $new_p/$new_m\033[0m"
+}
+
+# Last line of every answer: response time, model, how to switch
+_ai_footer() {
+    local start="$1" end="$2" provider="$3" model="$4" effort="$5"
+    local secs=$(awk -v a="$start" -v b="$end" 'BEGIN { printf "%.1f", b - a }')
+    local think=""
+    [ "$effort" != "none" ] && think=" · reasoning: $effort"
+    echo ""
+    echo -e "\033[0;90m⏱ ${secs}s · $provider/$model$think · Alt+M to switch model\033[0m"
+}
+
 # ═══════════════════════════════════════
 # CONFIG SYSTEM
 # ═══════════════════════════════════════
@@ -19,7 +178,8 @@ _ai_load_config() {
     local key="$1"
     local default="$2"
     if [ -f "$AI_CONFIG_FILE" ]; then
-        local val=$(jq -r "$key // empty" "$AI_CONFIG_FILE" 2>/dev/null)
+        # Not `// empty`: that would turn an explicit false into the default
+        local val=$(jq -r "$key | if . == null then empty else . end" "$AI_CONFIG_FILE" 2>/dev/null)
         if [ -n "$val" ] && [ "$val" != "null" ]; then
             echo "$val"
             return
@@ -45,6 +205,34 @@ _ai_set_config() {
     jq "$key = $value" "$AI_CONFIG_FILE" > "$tmp" && mv "$tmp" "$AI_CONFIG_FILE"
 }
 
+# The shared api-key file only counts for the provider its prefix belongs to
+_ai_key_matches() {
+    local provider="$1" key="$2"
+    case "$key" in
+        sk-ant-*) [ "$provider" = "anthropic" ] ;;
+        sk-*)     [ "$provider" = "openai" ] ;;
+        AI*)      [ "$provider" = "google" ] ;;
+        *)        return 0 ;;
+    esac
+}
+
+_ai_get_api_key() {
+    local provider="$1"
+    local provider_key_file="$AI_CONFIG_DIR/api-key-$provider"
+    local default_key_file="$AI_CONFIG_DIR/api-key"
+    if [ -f "$provider_key_file" ]; then
+        tr -d '[:space:]' < "$provider_key_file"
+    elif [ -f "$default_key_file" ] && _ai_key_matches "$provider" "$(tr -d '[:space:]' < "$default_key_file")"; then
+        tr -d '[:space:]' < "$default_key_file"
+    else
+        case "$provider" in
+            anthropic) echo "${ANTHROPIC_API_KEY:-}" ;;
+            google)    echo "${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}" ;;
+            *)         echo "${OPENAI_API_KEY:-}" ;;
+        esac
+    fi
+}
+
 _ai_show_config() {
     if [ ! -f "$AI_CONFIG_FILE" ]; then
         echo "No config file found. Run the installer or use 'ai config set'."
@@ -52,10 +240,12 @@ _ai_show_config() {
     fi
     echo -e "\033[1m┌─ AI Shelly Configuration ─┐\033[0m"
     echo ""
-    local provider=$(_ai_load_config ".provider" "anthropic")
-    local model=$(_ai_load_config ".model" "claude-haiku-4-5-20251001")
+    local provider=$(_ai_load_config ".provider" "$AI_DEFAULT_PROVIDER")
+    local model=$(_ai_load_config ".model" "$(_ai_default_model "$provider")")
+    local effort=$(_ai_load_config ".reasoning_effort" "none")
     echo -e "  Provider:     \033[0;36m$provider\033[0m"
     echo -e "  Model:        \033[0;36m$model\033[0m"
+    echo -e "  Reasoning:    \033[0;36m$effort\033[0m  (fixes use low, 'ai -t' uses medium)"
     echo ""
     echo -e "  \033[1mFeatures:\033[0m"
     for feat in funfact linus_quotes ascii_art roast self_improve; do
@@ -177,9 +367,13 @@ _ai_generate_context() {
     done
     ctx+="Package manager: ${pkg_mgr:-unknown}"$'\n'
     ctx+="Init: $(ps -p 1 -o comm= 2>/dev/null)"$'\n'
-    if [ -f /proc/cmdline ]; then
-        ctx+="Kernel params: $(cat /proc/cmdline 2>/dev/null)"
-    fi
+
+    # Tools the model might otherwise assume exist (or not)
+    local tools=""
+    for t in rg fd fzf bat eza jq yq docker podman kubectl git gh ncdu htop btop nvim tmux python3 node npm flatpak snap; do
+        command -v "$t" &>/dev/null && tools+="$t "
+    done
+    ctx+="Installed tools: ${tools% }"
     echo "$ctx"
 }
 
@@ -190,6 +384,21 @@ _ai_ensure_context() {
         _ai_generate_context > "$cache_file"
     fi
     cat "$cache_file"
+}
+
+# Per-query context: where the user is and what just happened
+_ai_live_context() {
+    local last_cmd="$1" last_exit="$2"
+    local ctx="Date: $(date '+%Y-%m-%d %H:%M %Z')"$'\n'
+    ctx+="Current directory: $PWD"$'\n'
+    local listing=$(ls -Ap 2>/dev/null | head -40 | tr '\n' ' ')
+    [ -n "$listing" ] && ctx+="Directory contents (first 40): $listing"$'\n'
+    local branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+    [ -n "$branch" ] && ctx+="Git repo, branch: $branch"$'\n'
+    if [ -n "$last_cmd" ]; then
+        ctx+="Previous shell command: $last_cmd (exit code $last_exit)"$'\n'
+    fi
+    echo "$ctx"
 }
 
 # ═══════════════════════════════════════
@@ -215,25 +424,21 @@ _ai_memory_recent() {
     tail -n "$n" "$AI_MEMORY_INDEX" | jq -r '"[\(.ts)] Q: \(.query) → \(.command // "no command") | \(.explanation)"' 2>/dev/null
 }
 
+# Keyword search over memory in a single jq pass (scores by matching keywords)
 _ai_memory_search() {
     local query="$1" max_results=${2:-5}
     [ ! -f "$AI_MEMORY_INDEX" ] && return
-    local keywords=$(echo "$query" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '\n' | sort -u | grep -v '^$')
-    local results=""
-    while IFS= read -r line; do
-        local lower=$(echo "$line" | tr '[:upper:]' '[:lower:]')
-        local score=0
-        while IFS= read -r kw; do
-            if echo "$lower" | grep -q "$kw"; then
-                score=$((score + 1))
-            fi
-        done <<< "$keywords"
-        if [ "$score" -gt 0 ]; then
-            results+="${score}|${line}"$'\n'
-        fi
-    done < "$AI_MEMORY_INDEX"
-    echo "$results" | sort -t'|' -k1 -rn | head -n "$max_results" | cut -d'|' -f2- | \
-        jq -r '"[\(.ts)] Q: \(.query) → $ \(.command // "n/a")\n  \(.explanation)\n  Output: \(.output | if length > 200 then .[:200] + "..." else . end)"' 2>/dev/null
+    jq -rn --arg q "$query" --argjson n "$max_results" '
+        ["the","and","for","how","what","show","with","this","that","are","can","you",
+         "all","from","into","does","why","get","use","make","need","want","there"] as $stop
+        | ($q | ascii_downcase | [scan("[a-z0-9_.-]+")] | map(select(length > 2))
+            | unique | map(select(. as $w | $stop | index($w) | not))) as $kw
+        | [inputs | (tostring | ascii_downcase) as $l
+            | {s: ([$kw[] | select(. as $k | $l | contains($k))] | length), e: .}
+            | select(.s > 0)]
+        | sort_by(-.s) | .[:$n][] | .e
+        | "[\(.ts)] Q: \(.query) → $ \(if (.command // "") == "" then "n/a" else .command end)\n  \(.explanation)\n  Output: \(.output // "" | if length > 200 then .[:200] + "..." else . end)"
+    ' "$AI_MEMORY_INDEX" 2>/dev/null
 }
 
 _ai_memory_bundle() {
@@ -302,7 +507,7 @@ _ai_conversation_clear() {
 }
 
 # ═══════════════════════════════════════
-# SELF-CORRECTION
+# SELF-CORRECTION & SAFETY
 # ═══════════════════════════════════════
 
 _ai_detect_failure() {
@@ -315,83 +520,206 @@ _ai_detect_failure() {
     return 1
 }
 
+# Local backstop in case the model under-reports risk
+_ai_looks_destructive() {
+    echo "$1" | grep -qE '(^|[;&|[:space:]])(rm[[:space:]]+-[a-zA-Z]*[rf]|mkfs|dd[[:space:]].*of=/dev/|shred|wipefs|fdisk|parted|chmod[[:space:]]+-R[[:space:]]+[0-7]*[[:space:]]+/|chown[[:space:]]+-R.*[[:space:]]/([[:space:]]|$)|truncate[[:space:]]|>[[:space:]]*/dev/sd|git[[:space:]]+(reset[[:space:]]+--hard|clean[[:space:]]+-[a-z]*f|push[[:space:]].*--force)|docker[[:space:]]+system[[:space:]]+prune)'
+}
+
+# Commands that change the calling shell's state must run in the current shell
+_ai_needs_current_shell() {
+    [[ "$1" =~ ^[[:space:]]*(cd|pushd|popd|export|unset|source|\.|alias|unalias|nvm|conda|deactivate|pyenv|direnv)([[:space:]]|$) ]]
+}
+
+# Full-screen/interactive programs need the real terminal, so their output isn't captured
+_ai_needs_tty() {
+    [[ "$1" =~ ^[[:space:]]*(sudo[[:space:]]+)?(htop|top|btop|atop|nvtop|ncdu|vim?|nvim|nano|emacs|less|more|man|ssh|tmux|screen|watch|mc|ranger|fzf|nmtui|alsamixer)([[:space:]]|$) ]]
+}
+
 # ═══════════════════════════════════════
 # MULTI-PROVIDER API CALLS
 # ═══════════════════════════════════════
+# Effort levels used by this script: none (default, fastest), low (fixes), medium (ai -t).
+# Each provider maps them onto whatever the model supports.
 
-_ai_call_anthropic() {
-    local api_key="$1" system_prompt="$2" messages_json="$3" max_tokens="$4" model="$5"
-    curl -s --max-time 30 https://api.anthropic.com/v1/messages \
-        -H "content-type: application/json" \
-        -H "x-api-key: $api_key" \
-        -H "anthropic-version: 2023-06-01" \
-        -d "$(jq -n \
-            --arg system "$system_prompt" \
-            --argjson messages "$messages_json" \
-            --argjson max_tokens "$max_tokens" \
-            --arg model "$model" \
-            '{model:$model, max_tokens:$max_tokens, system:$system, messages:$messages}')" 2>/dev/null
+_ai_openai_effort() {
+    local model="$1" effort="$2"
+    case "$model" in
+        gpt-4*|gpt-3.5*|*chat-latest*) echo "" ;;                       # not reasoning models
+        gpt-5|gpt-5-20*|gpt-5-mini*|gpt-5-nano*|gpt-5-codex*)           # oldest GPT-5: no "none"
+            [ "$effort" = "none" ] && echo "minimal" || echo "$effort" ;;
+        o[0-9]*|gpt-6-astra*|gpt-6.1*|*-pro*)                            # always reason
+            [ "$effort" = "none" ] && echo "low" || echo "$effort" ;;
+        *) echo "$effort" ;;
+    esac
 }
 
 _ai_call_openai() {
-    local api_key="$1" system_prompt="$2" messages_json="$3" max_tokens="$4" model="$5"
-    local full_messages=$(jq -n --arg sys "$system_prompt" --argjson msgs "$messages_json" \
-        '[{role:"system",content:$sys}] + $msgs')
-    curl -s --max-time 30 https://api.openai.com/v1/chat/completions \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $api_key" \
-        -d "$(jq -n \
-            --argjson messages "$full_messages" \
-            --argjson max_completion_tokens "$max_tokens" \
-            --arg model "$model" \
-            '{model:$model, max_completion_tokens:$max_completion_tokens, messages:$messages}')" 2>/dev/null
+    local api_key="$1" system_prompt="$2" messages_json="$3" max_tokens="$4" model="$5" effort="$6"
+    effort=$(_ai_openai_effort "$model" "$effort")
+    local attempt response err supported
+    for attempt in 1 2; do
+        response=$(curl -s --max-time 90 https://api.openai.com/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H @<(printf 'Authorization: Bearer %s\n' "$api_key") \
+            -d "$(jq -n \
+                --arg sys "$system_prompt" \
+                --argjson msgs "$messages_json" \
+                --argjson max_tokens "$max_tokens" \
+                --arg model "$model" \
+                --arg effort "$effort" \
+                '{model:$model, max_completion_tokens:$max_tokens,
+                  messages:([{role:"system",content:$sys}] + $msgs),
+                  response_format:{type:"json_object"}}
+                 + (if $effort == "" then {} else {reasoning_effort:$effort} end)')" 2>/dev/null)
+        err=$(echo "$response" | jq -r '.error.message // empty' 2>/dev/null)
+        # Self-heal when the model rejects the effort level: use the lowest one it supports
+        if [[ "$err" == *reasoning_effort* ]]; then
+            supported=$(echo "$err" | grep -oE "Supported values are: '[a-z]+'" | grep -oE "'[a-z]+'" | tr -d "'")
+            effort="$supported"
+            continue
+        fi
+        break
+    done
+    echo "$response"
+}
+
+_ai_call_anthropic() {
+    local api_key="$1" system_prompt="$2" messages_json="$3" max_tokens="$4" model="$5" effort="$6"
+    # Thinking/effort controls differ per model generation
+    local extra='{}'
+    case "$model" in
+        claude-3*|claude-haiku-4*|claude-*-4-5*|claude-*-4-1*|claude-*-4-2025*|claude-*-4-0*) ;;
+        claude-sonnet-5-5*)
+            if [ "$effort" = "none" ]; then
+                extra='{"thinking":{"type":"between_tools"},"output_config":{"effort":"low"}}'
+            else
+                extra=$(jq -nc --arg e "$effort" '{output_config:{effort:$e}}')
+            fi ;;
+        claude-*)
+            # Opus 5.5 / Fable can't disable thinking; low effort keeps it short
+            [ "$effort" = "none" ] && effort="low"
+            extra=$(jq -nc --arg e "$effort" '{output_config:{effort:$e}}') ;;
+    esac
+    local attempt response err
+    for attempt in 1 2; do
+        response=$(curl -s --max-time 90 https://api.anthropic.com/v1/messages \
+            -H "content-type: application/json" \
+            -H @<(printf 'x-api-key: %s\n' "$api_key") \
+            -H "anthropic-version: 2023-06-01" \
+            -d "$(jq -n \
+                --arg system "$system_prompt" \
+                --argjson messages "$messages_json" \
+                --argjson max_tokens "$max_tokens" \
+                --arg model "$model" \
+                --argjson extra "$extra" \
+                '{model:$model, max_tokens:$max_tokens, system:$system, messages:$messages} + $extra')" 2>/dev/null)
+        err=$(echo "$response" | jq -r '.error.message // empty' 2>/dev/null)
+        if [ -n "$err" ] && [ "$extra" != '{}' ] && [[ "$err" == *thinking* || "$err" == *effort* || "$err" == *output_config* ]]; then
+            extra='{}'
+            continue
+        fi
+        break
+    done
+    echo "$response"
 }
 
 _ai_call_google() {
-    local api_key="$1" system_prompt="$2" messages_json="$3" max_tokens="$4" model="$5"
+    local api_key="$1" system_prompt="$2" messages_json="$3" max_tokens="$4" model="$5" effort="$6"
     local contents=$(echo "$messages_json" | jq '[.[] | {role: (if .role == "assistant" then "model" else .role end), parts: [{text: .content}]}]')
-    curl -s --max-time 30 \
-        "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${api_key}" \
-        -H "Content-Type: application/json" \
-        -d "$(jq -n \
-            --arg sys "$system_prompt" \
-            --argjson contents "$contents" \
-            --argjson max_tokens "$max_tokens" \
-            '{contents:$contents, systemInstruction:{parts:[{text:$sys}]}, generationConfig:{maxOutputTokens:$max_tokens}}')" 2>/dev/null
+    local thinking='null'
+    case "$model" in
+        gemini-2.5-flash*)
+            case "$effort" in none) thinking='{"thinkingBudget":0}' ;; low) thinking='{"thinkingBudget":1024}' ;; *) thinking='{"thinkingBudget":4096}' ;; esac ;;
+        gemini-2*|gemini-1*) ;;
+        gemini-*)
+            case "$effort" in none) thinking='{"thinkingLevel":"minimal"}' ;; *) thinking=$(jq -nc --arg e "$effort" '{thinkingLevel:$e}') ;; esac ;;
+    esac
+    local attempt response err
+    for attempt in 1 2; do
+        response=$(curl -s --max-time 90 \
+            "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent" \
+            -H "Content-Type: application/json" \
+            -H @<(printf 'x-goog-api-key: %s\n' "$api_key") \
+            -d "$(jq -n \
+                --arg sys "$system_prompt" \
+                --argjson contents "$contents" \
+                --argjson max_tokens "$max_tokens" \
+                --argjson thinking "$thinking" \
+                '{contents:$contents, systemInstruction:{parts:[{text:$sys}]},
+                  generationConfig:({maxOutputTokens:$max_tokens, responseMimeType:"application/json"}
+                    + (if $thinking == null then {} else {thinkingConfig:$thinking} end))}')" 2>/dev/null)
+        err=$(echo "$response" | jq -r '.error.message // empty' 2>/dev/null)
+        if [ -n "$err" ] && [ "$thinking" != 'null' ] && [[ "$err" == *hinking* ]]; then
+            thinking='null'
+            continue
+        fi
+        break
+    done
+    echo "$response"
 }
 
+# Usage: _ai_call_api provider model api_key system_prompt messages_json [effort] [max_tokens]
 _ai_call_api() {
-    local api_key="$1" system_prompt="$2" messages_json="$3" max_tokens="${4:-1024}"
-    local provider=$(_ai_load_config ".provider" "anthropic")
-    local model=$(_ai_load_config ".model" "claude-haiku-4-5-20251001")
-
+    local provider="$1" model="$2" api_key="$3" system_prompt="$4" messages_json="$5"
+    local effort="${6:-none}" max_tokens="${7:-8192}"
     case "$provider" in
-        anthropic) _ai_call_anthropic "$api_key" "$system_prompt" "$messages_json" "$max_tokens" "$model" ;;
-        openai)    _ai_call_openai    "$api_key" "$system_prompt" "$messages_json" "$max_tokens" "$model" ;;
-        google)    _ai_call_google    "$api_key" "$system_prompt" "$messages_json" "$max_tokens" "$model" ;;
-        *)         _ai_call_anthropic "$api_key" "$system_prompt" "$messages_json" "$max_tokens" "$model" ;;
+        anthropic) _ai_call_anthropic "$api_key" "$system_prompt" "$messages_json" "$max_tokens" "$model" "$effort" ;;
+        google)    _ai_call_google    "$api_key" "$system_prompt" "$messages_json" "$max_tokens" "$model" "$effort" ;;
+        *)         _ai_call_openai    "$api_key" "$system_prompt" "$messages_json" "$max_tokens" "$model" "$effort" ;;
     esac
 }
 
 _ai_extract_text() {
-    local response="$1"
-    local provider=$(_ai_load_config ".provider" "anthropic")
+    local provider="$1" response="$2"
     case "$provider" in
-        anthropic) echo "$response" | jq -r '.content[0].text // empty' 2>/dev/null ;;
-        openai)    echo "$response" | jq -r '.choices[0].message.content // empty' 2>/dev/null ;;
-        google)    echo "$response" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null ;;
-        *)         echo "$response" | jq -r '.content[0].text // empty' 2>/dev/null ;;
+        # Thinking-capable Claude models can return thinking blocks before the text
+        anthropic) echo "$response" | jq -r '[.content[]? | select(.type == "text") | .text] | join("")' 2>/dev/null ;;
+        google)    echo "$response" | jq -r '[.candidates[0].content.parts[]? | select(.thought != true) | .text // empty] | join("")' 2>/dev/null ;;
+        *)         echo "$response" | jq -r '.choices[0].message.content // empty' 2>/dev/null ;;
     esac
 }
 
 _ai_extract_error() {
-    local response="$1"
-    local provider=$(_ai_load_config ".provider" "anthropic")
+    local provider="$1" response="$2"
+    local err=$(echo "$response" | jq -r '.error.message // empty' 2>/dev/null)
+    if [ -z "$err" ] && [ "$provider" = "anthropic" ]; then
+        [ "$(echo "$response" | jq -r '.stop_reason // empty' 2>/dev/null)" = "refusal" ] && err="The model declined this request."
+    fi
+    echo "$err"
+}
+
+# Pull a JSON object out of model text (handles fences, chatter, raw newlines) and print it compact
+_ai_parse_json() {
+    local text="$1"
+    if echo "$text" | jq -ce 'type == "object"' >/dev/null 2>&1; then
+        echo "$text" | jq -c .
+        return 0
+    fi
+    [[ "$text" == *"{"*"}"* ]] || return 1
+    text="{${text#*\{}"
+    text="${text%\}*}}"
+    echo "$text" | jq -c . 2>/dev/null && return 0
+    echo "$text" | tr '\n' ' ' | jq -c . 2>/dev/null
+}
+
+# List models available to your key, straight from the provider
+_ai_list_models() {
+    local provider="$1" api_key="$2"
     case "$provider" in
-        anthropic) echo "$response" | jq -r '.error.message // empty' 2>/dev/null ;;
-        openai)    echo "$response" | jq -r '.error.message // empty' 2>/dev/null ;;
-        google)    echo "$response" | jq -r '.error.message // empty' 2>/dev/null ;;
-        *)         echo "$response" | jq -r '.error.message // empty' 2>/dev/null ;;
+        anthropic)
+            curl -s --max-time 20 "https://api.anthropic.com/v1/models?limit=100" \
+                -H @<(printf 'x-api-key: %s\n' "$api_key") -H "anthropic-version: 2023-06-01" \
+                | jq -r '.data[]?.id' ;;
+        google)
+            curl -s --max-time 20 "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200" \
+                -H @<(printf 'x-goog-api-key: %s\n' "$api_key") \
+                | jq -r '.models[]? | select(.supportedGenerationMethods | index("generateContent")) | .name | ltrimstr("models/")' \
+                | grep -E '^gemini' | grep -vE 'image|tts|audio|embedding|live' | sort -V ;;
+        *)
+            curl -s --max-time 20 https://api.openai.com/v1/models \
+                -H @<(printf 'Authorization: Bearer %s\n' "$api_key") \
+                | jq -r '.data[]?.id' | grep -E '^(gpt-[4-9]|o[0-9])' \
+                | grep -vE 'audio|realtime|tts|transcribe|image|search|instruct|codex|live|-[0-9]{4}-[0-9]{2}-[0-9]{2}$' | sort -V ;;
     esac
 }
 
@@ -400,7 +728,7 @@ _ai_extract_error() {
 # ═══════════════════════════════════════
 
 _ai_self_improve() {
-    local api_key="$1" query="$2"
+    local provider="$1" model="$2" api_key="$3" query="$4"
     local own_source=$(head -c 3000 "$AI_SHELL_SOURCE" 2>/dev/null)
     local recent_memory=""
     if [ -f "$AI_MEMORY_INDEX" ]; then
@@ -416,14 +744,11 @@ $recent_memory
 
 LAST QUERY: $query
 
-Respond ONLY with JSON, no fences: {\"suggestion\": \"...\", \"reason\": \"...\"}"
+Respond ONLY with JSON: {\"suggestion\": \"...\", \"reason\": \"...\"}"
 
     local messages=$(jq -n --arg q "Analyze and suggest one improvement." '[{role:"user",content:$q}]')
-    local response=$(_ai_call_api "$api_key" "$improve_prompt" "$messages" 256)
-    local text=$(_ai_extract_text "$response")
-    [ -z "$text" ] || [ "$text" = "null" ] && return
-
-    text=$(echo "$text" | sed 's/^```json//;s/^```//;s/```$//' | tr -d '\n')
+    local response=$(_ai_call_api "$provider" "$model" "$api_key" "$improve_prompt" "$messages" none 1024)
+    local text=$(_ai_parse_json "$(_ai_extract_text "$provider" "$response")") || return
     local suggestion=$(echo "$text" | jq -r '.suggestion // empty' 2>/dev/null)
     local reason=$(echo "$text" | jq -r '.reason // empty' 2>/dev/null)
     if [ -n "$suggestion" ]; then
@@ -437,17 +762,25 @@ Respond ONLY with JSON, no fences: {\"suggestion\": \"...\", \"reason\": \"...\"
 # ═══════════════════════════════════════
 
 ai() {
+    # Must be first: exit status of whatever the user ran before `ai`
+    local last_exit=$?
+    local last_cmd=""
+    if [[ $- == *i* ]]; then
+        last_cmd=$(fc -ln -2 -2 2>/dev/null | sed 's/^[[:space:]]*//')
+        [[ "$last_cmd" =~ ^(ai|ask)([[:space:]]|$) ]] && last_cmd=""
+    fi
+
     # ── Subcommands ──
     case "$1" in
         config)
             shift
             if [ "$1" = "set" ] && [ -n "$2" ] && [ -n "$3" ]; then
                 local key="$2" val="$3"
-                # Handle boolean values
-                if [ "$val" = "true" ] || [ "$val" = "false" ]; then
+                # Store booleans and numbers as JSON types
+                if [[ "$val" =~ ^(true|false|[0-9]+)$ ]]; then
                     _ai_set_config ".$key" "$val"
                 else
-                    _ai_set_config ".$key" "\"$val\""
+                    _ai_set_config ".$key" "$(jq -n --arg v "$val" '$v')"
                 fi
                 echo -e "\033[0;32m✓ Set $key = $val\033[0m"
             else
@@ -457,56 +790,47 @@ ai() {
             ;;
         model)
             shift
-            _ai_show_models() {
-                local prov="$1"
-                echo ""
-                case "$prov" in
-                    openai)
-                        echo -e "  Available OpenAI models:"
-                        echo -e "    ${GREEN}gpt-5-nano${RESET}          \$0.05/1M in  — ultra-cheap, fastest"
-                        echo -e "    gpt-5-mini          \$0.25/1M in  — fast, affordable"
-                        echo -e "    gpt-5.1             \$1.25/1M in  — balanced"
-                        echo -e "    gpt-5.2             \$1.75/1M in  — premium reasoning"
-                        ;;
-                    anthropic)
-                        echo -e "  Available Anthropic models:"
-                        echo -e "    ${GREEN}claude-haiku-4-5${RESET}    \$1.00/1M in  — fast, cheapest"
-                        echo -e "    claude-sonnet-4-5   \$3.00/1M in  — balanced"
-                        echo -e "    claude-opus-4-5     \$5.00/1M in  — most capable"
-                        ;;
-                    google)
-                        echo -e "  Available Google models:"
-                        echo -e "    ${GREEN}gemini-3-flash${RESET}      \$0.50/1M in  — latest gen, fast"
-                        echo -e "    gemini-2.5-flash    \$0.30/1M in  — stable workhorse"
-                        echo -e "    gemini-2.5-flash-lite \$0.10/1M in — ultra-cheap"
-                        echo -e "    gemini-2.5-pro      \$1.25/1M in  — most capable"
-                        ;;
-                esac
-                echo ""
-            }
+            if [ -z "$1" ] && [ -t 1 ]; then
+                _ai_pick_model
+                return
+            fi
             if [ -z "$1" ]; then
-                local p=$(_ai_load_config ".provider" "openai")
-                local m=$(_ai_load_config ".model" "gpt-5-nano-2025-08-07")
+                local p=$(_ai_load_config ".provider" "$AI_DEFAULT_PROVIDER")
+                local m=$(_ai_load_config ".model" "$(_ai_default_model "$p")")
                 echo -e "Current: \033[0;36m$p / $m\033[0m"
                 _ai_show_models "$p"
                 echo -e "  \033[0;90mUsage:\033[0m"
                 echo -e "  \033[0;90m  ai model <provider>          — switch provider (use default model)\033[0m"
                 echo -e "  \033[0;90m  ai model <provider> <model>  — switch to specific model\033[0m"
+                echo -e "  \033[0;90m  ai models [provider]         — list every model your key can use\033[0m"
                 echo -e "  \033[0;90m  Providers: openai, anthropic, google\033[0m"
                 return 0
             fi
             local new_provider="$1"
             local new_model="$2"
             case "$new_provider" in
-                anthropic) [ -z "$new_model" ] && { _ai_show_models "$new_provider"; new_model="claude-haiku-4-5-20251001"; echo -e "  \033[0;90mDefaulting to: $new_model\033[0m"; } ;;
-                openai)    [ -z "$new_model" ] && { _ai_show_models "$new_provider"; new_model="gpt-5-nano-2025-08-07"; echo -e "  \033[0;90mDefaulting to: $new_model\033[0m"; } ;;
-                google)    [ -z "$new_model" ] && { _ai_show_models "$new_provider"; new_model="gemini-3.0-flash"; echo -e "  \033[0;90mDefaulting to: $new_model\033[0m"; } ;;
+                anthropic|openai|google) ;;
                 *) echo "Unknown provider: $new_provider (use: anthropic, openai, google)"; return 1 ;;
             esac
+            if [ -z "$new_model" ]; then
+                _ai_show_models "$new_provider"
+                new_model=$(_ai_default_model "$new_provider")
+                echo -e "  \033[0;90mDefaulting to: $new_model\033[0m"
+            fi
             _ai_set_config ".provider" "\"$new_provider\""
             _ai_set_config ".model" "\"$new_model\""
             echo -e "\033[0;32m✓ Switched to $new_provider / $new_model\033[0m"
-            echo -e "\033[0;90m  Make sure your API key works for this provider.\033[0m"
+            [ -z "$(_ai_get_api_key "$new_provider")" ] && \
+                echo -e "\033[0;33m  No key found. Save one to $AI_CONFIG_DIR/api-key-$new_provider\033[0m"
+            return 0
+            ;;
+        models)
+            shift
+            local p="${1:-$(_ai_load_config ".provider" "$AI_DEFAULT_PROVIDER")}"
+            local k=$(_ai_get_api_key "$p")
+            [ -z "$k" ] && { echo "No API key for $p."; return 1; }
+            echo -e "\033[0;36mModels available to your $p key:\033[0m"
+            _ai_list_models "$p" "$k" | column -c "${COLUMNS:-100}"
             return 0
             ;;
         recall)
@@ -534,48 +858,53 @@ ai() {
             ;;
     esac
 
+    # Locale-proof: EPOCHREALTIME uses the locale's decimal separator
+    local t_start=$(LC_ALL=C date +%s.%N)
+
+    # ── Think harder for this one query ──
+    local provider=$(_ai_load_config ".provider" "$AI_DEFAULT_PROVIDER")
+    local model=$(_ai_load_config ".model" "$(_ai_default_model "$provider")")
+    local effort=$(_ai_load_config ".reasoning_effort" "none")
+    if [ "$1" = "-t" ] || [ "$1" = "--think" ]; then
+        shift
+        effort="medium"
+    fi
+
     local query="$*"
 
     # ── Pipe mode ──
     local piped_input=""
     if [ ! -t 0 ]; then
-        piped_input=$(cat | head -c 4000)
+        piped_input=$(cat | head -c 8000)
         [ -z "$query" ] && query="analyze this output"
     fi
 
     if [ -z "$query" ]; then
         echo "Usage: ai <what you want to do>"
-        echo "       ai config                  -- view/edit configuration"
-        echo "       ai model <provider>         -- switch AI provider/model"
+        echo "       ai -t <question>            -- think harder (slower, smarter)"
+        echo "       ai config                   -- view/edit configuration"
+        echo "       ai model <provider> [model] -- switch AI provider/model"
+        echo "       ai models [provider]        -- list models your key can use"
         echo "       ai recall <search query>    -- search past interactions"
         echo "       ai history                  -- show recent history"
         echo "       ai forget                   -- wipe memory + conversation"
+        echo "       Alt+M  or  ai model         -- pick a model from the newest available"
         echo "       ask                         -- interactive mode"
         echo "       <cmd> | ai <question>       -- pipe mode"
         return 1
     fi
 
     # ── Load API key ──
-    local api_key=""
-    local provider=$(_ai_load_config ".provider" "anthropic")
-    local provider_key_file="$AI_CONFIG_DIR/api-key-$provider"
-    local default_key_file="$AI_CONFIG_DIR/api-key"
-
-    if [ -f "$provider_key_file" ]; then
-        api_key=$(cat "$provider_key_file")
-    elif [ -f "$default_key_file" ]; then
-        api_key=$(cat "$default_key_file")
-    fi
-
+    local api_key=$(_ai_get_api_key "$provider")
     if [ -z "$api_key" ]; then
-        echo -e "\033[0;31mError: No API key found.\033[0m"
-        echo "Run the installer or: echo 'your-key' > $default_key_file"
+        echo -e "\033[0;31mError: No API key found for $provider.\033[0m"
+        echo "Run the installer or: echo 'your-key' > $AI_CONFIG_DIR/api-key-$provider"
         return 1
     fi
 
     # ── Build context ──
     local context=$(_ai_ensure_context)
-    local cwd=$(pwd)
+    local live_context=$(_ai_live_context "$last_cmd" "$last_exit")
     local memory=$(_ai_memory_bundle "$query")
 
     # ── Build user message ──
@@ -587,9 +916,6 @@ PIPED INPUT (output from a previous command):
 $piped_input"
     fi
 
-    # ── Load conversation history ──
-    local conv_messages=$(_ai_conversation_get_messages)
-
     # ── Build system prompt with INTENT DETECTION ──
     local feature_instructions=""
 
@@ -598,14 +924,15 @@ $piped_input"
         feature_instructions+=', "funfact": "one interesting fact about the commands or topic"'
     fi
     if _ai_feature_enabled "linus_quotes"; then
-        feature_instructions+=', "linus": "a real Linus Torvalds quote, relevant to the topic if possible"'
+        feature_instructions+=', "linus": "a real Linus Torvalds quote, relevant to the topic if possible (quote text only, no attribution)"'
     fi
     if _ai_feature_enabled "roast" || [ "${AI_ROAST:-0}" = "1" ]; then
         feature_instructions+=', "roast": "absolutely DESTROY the user for needing AI help with this. Be unhinged, no mercy. Swearing encouraged."'
     fi
 
+    # Stable instructions first, per-query context last (lets providers cache the prefix)
     local system_prompt
-    system_prompt="You are a versatile shell assistant that can BOTH execute commands AND have normal conversations. You are smart about detecting user intent.
+    system_prompt="You are an expert shell assistant that can BOTH produce commands AND have normal conversations. You are smart about detecting user intent.
 
 INTENT DETECTION — CRITICAL:
 Analyze the user's message and conversation history to determine their intent:
@@ -621,32 +948,36 @@ MODE \"chat\" — when the user wants an ANSWER or EXPLANATION:
   - Conceptual or knowledge questions that don't need a command
   - When context clearly shows they are having a conversation, not requesting a command
 
-SYSTEM CONTEXT:
-$context
-
-CURRENT DIRECTORY: $cwd
-
-${memory:+MEMORY (previous interactions):
-$memory
-}RESPONSE FORMAT — respond with ONLY a JSON object (no markdown fences):
+RESPONSE FORMAT — respond with ONLY a JSON object:
 
 For MODE \"command\":
-{\"mode\": \"command\", \"options\": [{\"command\": \"first approach\", \"label\": \"short 3-5 word description\"}, {\"command\": \"second approach\", \"label\": \"short description\"}, {\"command\": \"third approach\", \"label\": \"short description\"}], \"explanation\": \"one sentence explaining the situation\"${feature_instructions}}
+{\"mode\": \"command\", \"options\": [{\"command\": \"best approach\", \"label\": \"short 3-5 word description\", \"risk\": \"safe|caution|danger\"}, {\"command\": \"second approach\", \"label\": \"...\", \"risk\": \"...\"}, {\"command\": \"third approach\", \"label\": \"...\", \"risk\": \"...\"}], \"explanation\": \"one sentence explaining the situation\"${feature_instructions}}
 
 For MODE \"chat\":
 {\"mode\": \"chat\", \"answer\": \"your conversational response (can be multiple paragraphs, use \\n for newlines)\"${feature_instructions}}
 
 RULES:
-- In command mode, always provide exactly 3 options ordered by recommendation.
-- In chat mode, give a helpful, natural answer. You are not forced to suggest commands.
+- In command mode, provide 3 genuinely different options ordered by recommendation (best first).
+- Each command must work as-is when pasted into this user's shell: correct flags for their OS and tool versions, quote paths, no placeholders like <file> unless unavoidable.
+- risk: \"safe\" = read-only or trivially reversible; \"caution\" = changes state (installs, edits, restarts); \"danger\" = deletes data, overwrites disks, or is hard to undo.
+- In chat mode, give a helpful, natural, concise answer. You are not forced to suggest commands.
+- Output is printed raw in a terminal: no Markdown bold, italics or headers (backticks around commands are fine).
 - If the user piped input, analyze it and respond appropriately (command or chat).
-- If the question doesnt need a command, use chat mode.
-- Use only tools available on their system.
-- Prefer simple, safe, non-destructive commands.
+- If the user refers to \"that\", \"it\", or an error without details, they likely mean the PREVIOUS SHELL COMMAND in context.
+- Use only tools available on their system. Prefer simple, safe, non-destructive commands.
 - For destructive ops (rm, dd, mkfs), always warn in the explanation.
 - For multi-step tasks, chain with && or use a subshell.
 - Keep command-mode explanations to one sentence.
-- You have access to the users command history in MEMORY. Use it for context."
+- You have access to the user's command history in MEMORY. Use it for context.
+
+SYSTEM CONTEXT:
+$context
+
+CURRENT CONTEXT:
+$live_context
+${memory:+
+MEMORY (previous interactions):
+$memory}"
 
     echo -e "\033[0;90mThinking...\033[0m"
 
@@ -655,42 +986,53 @@ RULES:
     local messages_json=$(_ai_conversation_get_messages)
 
     # ── API call ──
-    local response=$(_ai_call_api "$api_key" "$system_prompt" "$messages_json" 1024)
+    local response=$(_ai_call_api "$provider" "$model" "$api_key" "$system_prompt" "$messages_json" "$effort")
+    local t_end=$(LC_ALL=C date +%s.%N)
 
     if [ -z "$response" ]; then
         echo -e "\033[0;31mError: No response from API (network issue or timeout)\033[0m"
         return 1
     fi
 
-    local err_msg=$(_ai_extract_error "$response")
+    local err_msg=$(_ai_extract_error "$provider" "$response")
     if [ -n "$err_msg" ]; then
         echo -e "\033[0;31mAPI Error: $err_msg\033[0m"
         return 1
     fi
 
-    local text=$(_ai_extract_text "$response")
-
-    if [ -z "$text" ] || [ "$text" = "null" ]; then
+    local raw_text=$(_ai_extract_text "$provider" "$response")
+    if [ -z "$raw_text" ] || [ "$raw_text" = "null" ]; then
         echo -e "\033[0;31mError: Unexpected API response\033[0m"
         echo "$response" | jq . 2>/dev/null || echo "$response"
         return 1
     fi
 
-    # Strip markdown fences if wrapped
-    local stripped=$(echo "$text" | sed -n '/^```/,/^```/{/^```/d;p}' 2>/dev/null)
-    [ -n "$stripped" ] && text="$stripped"
-    text=$(echo "$text" | tr -d '\n')
-
-    if ! echo "$text" | jq empty 2>/dev/null; then
+    local text
+    if ! text=$(_ai_parse_json "$raw_text"); then
         echo -e "\033[0;31mError: Invalid JSON response. Raw:\033[0m"
-        echo "$text"
+        echo "$raw_text"
         return 1
     fi
 
-    local mode=$(echo "$text" | jq -r '.mode // "command"' 2>/dev/null)
-
     # Save assistant response to conversation buffer
     _ai_conversation_add "assistant" "$text"
+
+    # ── Unpack response in one jq call ──
+    local mode="" answer="" explanation="" funfact="" linus="" roast=""
+    local -a cmds=() labels=() risks=()
+    eval "$(echo "$text" | jq -r '
+        @sh "mode=\(.mode // "command" | tostring)",
+        @sh "answer=\(.answer // .explanation // "" | tostring)",
+        @sh "explanation=\(.explanation // "" | tostring)",
+        @sh "funfact=\(.funfact // "" | tostring)",
+        @sh "linus=\(.linus // "" | tostring)",
+        @sh "roast=\(.roast // "" | tostring)",
+        ((.options // []) | if type == "array" then . else [] end
+            | map(select(type == "object" and (.command // "") != "")) | .[:3]) as $o
+        | "cmds=(\($o | map(.command | tostring) | @sh))",
+          "labels=(\($o | map(.label // "" | tostring) | @sh))",
+          "risks=(\($o | map(.risk // "safe" | tostring) | @sh))"
+    ')"
 
     # Clear "Thinking..." line
     echo -en "\033[1A\033[2K"
@@ -699,120 +1041,122 @@ RULES:
     # CHAT MODE — conversational answer
     # ══════════════════════════════════
     if [ "$mode" = "chat" ]; then
-        local answer=$(echo "$text" | jq -r '.answer // .explanation // empty' 2>/dev/null)
         if [ -n "$answer" ]; then
             echo -e "\033[0;36m$answer\033[0m"
         fi
         _ai_memory_log "$query" "" "$answer" ""
 
     # ══════════════════════════════════
-    # COMMAND MODE — 3 options
+    # COMMAND MODE — pick an option
     # ══════════════════════════════════
     else
-        local explanation=$(echo "$text" | jq -r '.explanation // empty' 2>/dev/null)
-
-        if [ -z "$explanation" ]; then
-            echo -e "\033[0;31mError: Response missing 'explanation' field.\033[0m"
-            echo "$text" | jq . 2>/dev/null || echo "$text"
+        if [ -z "$explanation" ] && [ ${#cmds[@]} -eq 0 ]; then
+            echo -e "\033[0;31mError: Response had no explanation or commands.\033[0m"
+            echo "$text" | jq .
             return 1
         fi
 
-        local options_count=$(echo "$text" | jq '.options | length' 2>/dev/null)
-        if [ "$options_count" = "null" ] || [ "$options_count" = "0" ] || [ -z "$options_count" ]; then
-            echo -e "\033[0;36m→ $explanation\033[0m"
+        [ -n "$explanation" ] && echo -e "\033[0;36m→ $explanation\033[0m"
+
+        if [ ${#cmds[@]} -eq 0 ]; then
             _ai_memory_log "$query" "" "$explanation" ""
         else
-            local cmd1=$(echo "$text" | jq -r '.options[0].command // empty' 2>/dev/null)
-            local lbl1=$(echo "$text" | jq -r '.options[0].label // empty' 2>/dev/null)
-            local cmd2=$(echo "$text" | jq -r '.options[1].command // empty' 2>/dev/null)
-            local lbl2=$(echo "$text" | jq -r '.options[1].label // empty' 2>/dev/null)
-            local cmd3=$(echo "$text" | jq -r '.options[2].command // empty' 2>/dev/null)
-            local lbl3=$(echo "$text" | jq -r '.options[2].label // empty' 2>/dev/null)
-
-            echo -e "\033[0;36m→ $explanation\033[0m"
+            echo ""
+            local -a colors=("1;32" "1;34" "1;35")
+            local i n=${#cmds[@]}
+            for ((i = 0; i < n; i++)); do
+                local tag=""
+                if [ "${risks[$i]}" = "danger" ] || _ai_looks_destructive "${cmds[$i]}"; then
+                    risks[$i]="danger"
+                    tag=" \033[1;31m⚠ destructive\033[0m"
+                elif [ "${risks[$i]}" = "caution" ]; then
+                    tag=" \033[0;33m(changes system)\033[0m"
+                fi
+                echo -e "  \033[${colors[$i]}m[$((i + 1))]\033[0m \033[0;${colors[$i]#1;}m${labels[$i]}\033[0m$tag"
+                echo -e "      \033[1;33m\$ ${cmds[$i]}\033[0m"
+            done
             echo ""
 
-            if [ -n "$cmd1" ] && [ "$cmd1" != "null" ]; then
-                echo -e "  \033[1;32m[1]\033[0m \033[0;32m$lbl1\033[0m"
-                echo -e "      \033[1;33m\$ $cmd1\033[0m"
-                echo -e "  \033[1;34m[2]\033[0m \033[0;34m$lbl2\033[0m"
-                echo -e "      \033[1;33m\$ $cmd2\033[0m"
-                echo -e "  \033[1;35m[3]\033[0m \033[0;35m$lbl3\033[0m"
-                echo -e "      \033[1;33m\$ $cmd3\033[0m"
+            local choice range="1"
+            [ "$n" -ge 2 ] && range="1-$n"
+            # Read from the terminal so selection works in pipe mode too
+            read -r -p "Pick [$range] or q to cancel: " choice < /dev/tty
+
+            if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "$n" ]; then
+                echo "Cancelled."
+                _ai_memory_log "$query" "" "$explanation" ""
+                _ai_footer "$t_start" "$t_end" "$provider" "$model" "$effort"
+                return 0
+            fi
+            local selected_cmd="${cmds[$((choice - 1))]}"
+            local selected_risk="${risks[$((choice - 1))]}"
+
+            if [ "$selected_risk" = "danger" ]; then
+                local confirm
+                read -r -p $'\033[1;31mThis can destroy data. Type "yes" to run it: \033[0m' confirm < /dev/tty
+                if [ "$confirm" != "yes" ]; then
+                    echo "Cancelled."
+                    _ai_footer "$t_start" "$t_end" "$provider" "$model" "$effort"
+                    return 0
+                fi
+            fi
+
+            local cmd_output="" cmd_exit=0
+            _ai_run_command "$selected_cmd"
+
+            # Self-correction on failure: same conversation, a bit more reasoning
+            local failure_reason
+            failure_reason=$(_ai_detect_failure "$cmd_output" "$cmd_exit")
+            if [ $? -eq 0 ] && [ -n "$failure_reason" ]; then
                 echo ""
+                echo -e "\033[0;31m✗ Detected failure: $failure_reason\033[0m"
+                echo -e "\033[0;90mSelf-correcting...\033[0m"
 
-                local choice
-                read -p "Pick [1/2/3] or q to cancel: " choice
+                local retry_query="I ran: $selected_cmd
+It failed. Reason: $failure_reason
+Output (truncated):
+$(echo "$cmd_output" | tail -c 1500)
+Diagnose what went wrong and give me a corrected command (command mode, best fix first)."
 
-                local selected_cmd=""
-                case "$choice" in
-                    1) selected_cmd="$cmd1" ;;
-                    2) selected_cmd="$cmd2" ;;
-                    3) selected_cmd="$cmd3" ;;
-                    *) echo "Cancelled."; return 0 ;;
-                esac
+                local retry_msgs=$(jq -c --arg q "$retry_query" '. + [{role:"user",content:$q}]' <<< "$(_ai_conversation_get_messages)")
+                local fix_effort=$(_ai_load_config ".fix_reasoning_effort" "low")
+                local retry_response=$(_ai_call_api "$provider" "$model" "$api_key" "$system_prompt" "$retry_msgs" "$fix_effort")
+                local retry_text=$(_ai_parse_json "$(_ai_extract_text "$provider" "$retry_response")")
 
-                echo ""
-                echo -e "\033[1;33m  \$ $selected_cmd\033[0m"
-                echo ""
-
-                local cmd_output
-                cmd_output=$(eval "$selected_cmd" 2>&1)
-                local cmd_exit=$?
-                echo "$cmd_output"
-
-                # Self-correction on failure
-                local failure_reason
-                failure_reason=$(_ai_detect_failure "$cmd_output" "$cmd_exit")
-                if [ $? -eq 0 ] && [ -n "$failure_reason" ]; then
-                    echo ""
-                    echo -e "\033[0;31m✗ Detected failure: $failure_reason\033[0m"
-                    echo -e "\033[0;90mSelf-correcting...\033[0m"
-
-                    local retry_query="My previous query was: $query
-You suggested: $selected_cmd
-But it failed. Reason: $failure_reason
-Output: $(echo "$cmd_output" | head -c 300)
-Give me a corrected command."
-
-                    local retry_msgs=$(jq -n --arg q "$retry_query" '[{role:"user",content:$q}]')
-                    local retry_response=$(_ai_call_api "$api_key" "$system_prompt" "$retry_msgs" 1024)
-                    local retry_text=$(_ai_extract_text "$retry_response")
-
-                    if [ -n "$retry_text" ]; then
-                        local retry_stripped=$(echo "$retry_text" | sed -n '/^```/,/^```/{/^```/d;p}' 2>/dev/null)
-                        [ -n "$retry_stripped" ] && retry_text="$retry_stripped"
-                        retry_text=$(echo "$retry_text" | tr -d '\n')
-                        local retry_cmd=$(echo "$retry_text" | jq -r '.options[0].command // empty' 2>/dev/null)
-                        local retry_expl=$(echo "$retry_text" | jq -r '.explanation // empty' 2>/dev/null)
-
-                        if [ -n "$retry_cmd" ] && [ "$retry_cmd" != "null" ]; then
-                            echo -e "\033[0;36m→ Retry: $retry_expl\033[0m"
-                            echo -e "\033[1;33m  \$ $retry_cmd\033[0m"
-                            echo ""
-                            local retry_choice
-                            read -p "Run corrected command? [Y/n] " retry_choice
-                            if [[ "$retry_choice" =~ ^[Yy]?$ ]]; then
-                                cmd_output=$(eval "$retry_cmd" 2>&1)
-                                echo "$cmd_output"
-                                selected_cmd="$retry_cmd"
-                            fi
-                        fi
-                    fi
+                echo -en "\033[1A\033[2K"
+                local retry_cmd="" retry_expl="" retry_risk="safe"
+                if [ -n "$retry_text" ]; then
+                    retry_cmd=$(echo "$retry_text" | jq -r '.options[0].command // empty' 2>/dev/null)
+                    retry_expl=$(echo "$retry_text" | jq -r '.explanation // .answer // empty' 2>/dev/null)
+                    retry_risk=$(echo "$retry_text" | jq -r '.options[0].risk // "safe"' 2>/dev/null)
                 fi
 
-                _ai_memory_log "$query" "$selected_cmd" "$explanation" "$cmd_output"
-            else
-                _ai_memory_log "$query" "" "$explanation" ""
+                if [ -n "$retry_cmd" ]; then
+                    echo -e "\033[0;36m→ Fix: $retry_expl\033[0m"
+                    echo -e "\033[1;33m  \$ $retry_cmd\033[0m"
+                    echo ""
+                    local retry_choice prompt="Run corrected command? [Y/n] "
+                    if [ "$retry_risk" = "danger" ] || _ai_looks_destructive "$retry_cmd"; then
+                        prompt=$'\033[1;31m⚠ Destructive. Type "yes" to run it: \033[0m'
+                        read -r -p "$prompt" retry_choice < /dev/tty
+                        [ "$retry_choice" = "yes" ] && retry_choice="y" || retry_choice="n"
+                    else
+                        read -r -p "$prompt" retry_choice < /dev/tty
+                    fi
+                    if [[ "$retry_choice" =~ ^[Yy]?$ ]]; then
+                        _ai_run_command "$retry_cmd"
+                        selected_cmd="$retry_cmd"
+                    fi
+                elif [ -n "$retry_expl" ]; then
+                    echo -e "\033[0;36m→ $retry_expl\033[0m"
+                fi
             fi
+
+            _ai_memory_log "$query" "$selected_cmd" "$explanation" "$cmd_output"
         fi
     fi
 
     # ── Optional features (only if enabled in config) ──
-    local funfact=$(echo "$text" | jq -r '.funfact // empty' 2>/dev/null)
-    local linus=$(echo "$text" | jq -r '.linus // empty' 2>/dev/null)
-    local roast=$(echo "$text" | jq -r '.roast // empty' 2>/dev/null)
-
     if [ -n "$funfact" ] && _ai_feature_enabled "funfact"; then
         echo ""
         echo -e "\033[0;32m✦ $funfact\033[0m"
@@ -836,8 +1180,33 @@ Give me a corrected command."
 
     # Self-improvement (if enabled)
     if _ai_feature_enabled "self_improve"; then
-        _ai_self_improve "$api_key" "$query" &
-        wait $! 2>/dev/null
+        _ai_self_improve "$provider" "$model" "$api_key" "$query"
+    fi
+
+    _ai_footer "$t_start" "$t_end" "$provider" "$model" "$effort"
+}
+
+# Runs a chosen command, streaming its output live. Sets cmd_output and cmd_exit in the caller.
+_ai_run_command() {
+    local cmd="$1"
+    echo ""
+    echo -e "\033[1;33m  \$ $cmd\033[0m"
+    echo ""
+    if _ai_needs_current_shell "$cmd"; then
+        # cd/export/source must affect the user's shell, so no subshell or capture
+        eval "$cmd"
+        cmd_exit=$?
+        cmd_output=""
+    elif _ai_needs_tty "$cmd"; then
+        ( eval "$cmd" )
+        cmd_exit=$?
+        cmd_output=""
+    else
+        local out_file=$(mktemp)
+        ( eval "$cmd" ) 2>&1 | tee "$out_file"
+        cmd_exit=${PIPESTATUS[0]}
+        cmd_output=$(tail -c 4000 "$out_file")
+        rm -f "$out_file"
     fi
 }
 
@@ -850,6 +1219,25 @@ ask() {
         echo "No query entered."
         return 1
     fi
-    raw_query=$(echo "$raw_query" | tr -d "'\`")
-    ai $raw_query
+    # Split on whitespace without globbing so subcommands still work and quotes survive
+    local -a words
+    read -r -a words <<< "$raw_query"
+    ai "${words[@]}"
 }
+
+# Key-binding entry point. Readline holds the terminal in raw mode (no echo, Enter sends CR
+# with no newline translation), so `read` would never see Enter. Restore normal mode for
+# the picker, then hand the terminal back to readline.
+_ai_pick_model_key() {
+    local saved
+    saved=$(stty -g < /dev/tty 2>/dev/null)
+    stty sane < /dev/tty 2>/dev/null
+    echo ""
+    _ai_pick_model
+    [ -n "$saved" ] && stty "$saved" < /dev/tty 2>/dev/null
+}
+
+# Alt+M opens the model picker (interactive bash only)
+if [[ $- == *i* ]] && [ -n "$BASH_VERSION" ]; then
+    bind -x '"\em": _ai_pick_model_key' 2>/dev/null
+fi

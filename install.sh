@@ -173,10 +173,9 @@ detect_provider_from_key() {
 
 default_model_for_provider() {
     case "$1" in
-        anthropic) echo "claude-haiku-4-5-20251001" ;;
-        openai)    echo "gpt-5-nano-2025-08-07" ;;
-        google)    echo "gemini-3.0-flash" ;;
-        *)         echo "claude-haiku-4-5-20251001" ;;
+        anthropic) echo "claude-sonnet-5-5" ;;
+        google)    echo "gemini-flash-latest" ;;
+        *)         echo "gpt-6-sol" ;;
     esac
 }
 
@@ -216,43 +215,39 @@ echo ""
 
 case "$PROVIDER" in
     openai)
-        echo -e "  ${GREEN}[1]${RESET} gpt-5-nano          \$0.05/1M in  — ultra-cheap, fastest"
-        echo -e "  [2] gpt-5-mini          \$0.25/1M in  — fast, affordable"
-        echo -e "  [3] gpt-5.1             \$1.25/1M in  — balanced"
-        echo -e "  [4] gpt-5.2             \$1.75/1M in  — premium reasoning"
+        echo -e "  ${GREEN}[1]${RESET} gpt-6-sol           \$2.00/\$10.00 per 1M  — smart + fast (recommended)"
+        echo -e "  [2] gpt-6-luna          \$0.10/\$0.50  per 1M  — nearly as fast, ~20x cheaper"
+        echo -e "  [3] gpt-5.4-mini        \$0.75/\$4.50  per 1M  — fastest, older generation"
+        echo -e "  [4] gpt-6.1-sol         \$2.00/\$10.00 per 1M  — always reasons: smarter, slower"
         echo ""
         read -p "  Pick [1/2/3/4] (default: 1): " model_choice
         case "$model_choice" in
-            2) MODEL="gpt-5-mini-2025-08-07" ;;
-            3) MODEL="gpt-5.1-2025-11-12" ;;
-            4) MODEL="gpt-5.2-2025-12-11" ;;
-            *) MODEL="gpt-5-nano-2025-08-07" ;;
+            2) MODEL="gpt-6-luna" ;;
+            3) MODEL="gpt-5.4-mini" ;;
+            4) MODEL="gpt-6.1-sol" ;;
+            *) MODEL="gpt-6-sol" ;;
         esac
         ;;
     anthropic)
-        echo -e "  ${GREEN}[1]${RESET} claude-haiku-4-5    \$1.00/1M in  — fast, cheapest"
-        echo -e "  [2] claude-sonnet-4-5   \$3.00/1M in  — balanced"
-        echo -e "  [3] claude-opus-4-5     \$5.00/1M in  — most capable"
+        echo -e "  ${GREEN}[1]${RESET} claude-sonnet-5-5   \$2.00/\$10.00 per 1M  — smart, thinking off for speed (recommended)"
+        echo -e "  [2] claude-haiku-4-5    \$1.00/\$5.00  per 1M  — fastest, cheapest"
+        echo -e "  [3] claude-opus-5-5     \$4.00/\$20.00 per 1M  — most capable, always thinks (slower)"
         echo ""
         read -p "  Pick [1/2/3] (default: 1): " model_choice
         case "$model_choice" in
-            2) MODEL="claude-sonnet-4-5-20250514" ;;
-            3) MODEL="claude-opus-4-5-20250120" ;;
-            *) MODEL="claude-haiku-4-5-20251001" ;;
+            2) MODEL="claude-haiku-4-5" ;;
+            3) MODEL="claude-opus-5-5" ;;
+            *) MODEL="claude-sonnet-5-5" ;;
         esac
         ;;
     google)
-        echo -e "  ${GREEN}[1]${RESET} gemini-3-flash      \$0.50/1M in  — latest gen, fast"
-        echo -e "  [2] gemini-2.5-flash     \$0.30/1M in  — stable workhorse"
-        echo -e "  [3] gemini-2.5-flash-lite \$0.10/1M in — ultra-cheap"
-        echo -e "  [4] gemini-2.5-pro       \$1.25/1M in  — most capable"
+        echo -e "  ${GREEN}[1]${RESET} gemini-flash-latest       — Google's newest Flash (recommended)"
+        echo -e "  [2] gemini-flash-lite-latest  — newest Flash-Lite, cheapest"
         echo ""
-        read -p "  Pick [1/2/3/4] (default: 1): " model_choice
+        read -p "  Pick [1/2] (default: 1): " model_choice
         case "$model_choice" in
-            2) MODEL="gemini-2.5-flash" ;;
-            3) MODEL="gemini-2.5-flash-lite" ;;
-            4) MODEL="gemini-2.5-pro" ;;
-            *) MODEL="gemini-3.0-flash" ;;
+            2) MODEL="gemini-flash-lite-latest" ;;
+            *) MODEL="gemini-flash-latest" ;;
         esac
         ;;
 esac
@@ -306,6 +301,7 @@ jq -n \
     '{
         provider: $provider,
         model: $model,
+        reasoning_effort: "none",
         features: {
             funfact: $funfact,
             linus_quotes: $linus_quotes,
@@ -342,7 +338,9 @@ echo -e "    ai <what you want>         Natural language → commands"
 echo -e "    ask                        Interactive mode"
 echo -e "    <cmd> | ai <question>      Pipe mode"
 echo -e "    ai config                  View/edit configuration"
+echo -e "    ai -t <question>           Think harder (slower, smarter)"
 echo -e "    ai model <provider>        Switch AI provider"
+echo -e "    ai models                  List models your key can use"
 echo -e "    ai recall <search>         Search memory"
 echo -e "    ai history                 View history"
 echo -e "    ai forget                  Wipe memory"

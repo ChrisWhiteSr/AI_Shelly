@@ -66,6 +66,13 @@ ai what is a symlink and when would I use one
 # Follow up naturally (context is maintained)
 ai how do I create one
 
+# It sees the command you just ran and its exit code
+make
+ai why did that fail
+
+# Think harder on a tricky one (slower, smarter)
+ai -t why does my script work in a terminal but not under cron
+
 # Interactive mode (handles special characters)
 ask
 
@@ -80,10 +87,14 @@ ai recall docker commands
 ai config
 ai config set features.roast true
 
-# Switch AI providers
+# Pick a model from the newest OpenAI and Anthropic releases (also: press Alt+M)
+ai model
+
+# Switch AI providers / models directly
 ai model openai
-ai model anthropic claude-sonnet-4-20250514
+ai model anthropic claude-haiku-4-5
 ai model google
+ai models          # list every model your key can use
 
 # View history
 ai history
@@ -118,7 +129,26 @@ PS> ai what is a symlink
 3. **Command mode:** Returns 3 options, you pick one, it runs
 4. **Chat mode:** Returns a natural language answer
 5. Context from the last 3 exchanges is maintained for follow-ups
-6. If a command fails, it auto-retries with a corrected version
+6. If a command fails, it diagnoses the error (with a little extra reasoning) and offers a fix
+7. Commands are tagged by risk; destructive ones need you to type `yes`
+8. Every answer ends with a footer showing the response time and model, e.g.
+   `⏱ 2.7s · openai/gpt-6-sol · Alt+M to switch model`
+
+### Model picker
+
+Press **Alt+M** at the prompt (or run `ai model`) to open the picker. It lists the six newest
+chat models from each provider you have a key for, fetched live from the provider and cached
+for a day, with prices for models it knows. Type a number to switch, any model id
+(e.g. `claude-haiku-4-5`) to use one not on the list, or `r` to refresh.
+
+### Speed
+
+Modern models think before answering by default, which made simple requests take
+30-70 seconds (and older `gpt-5-nano` setups sometimes spent the whole token budget
+thinking and returned nothing). AI Shelly now turns reasoning **off** for normal requests
+(`reasoning_effort: "none"`), uses each provider's JSON output mode, and only reasons
+when it helps: `low` when fixing a failed command, `medium` with `ai -t`. Typical
+responses come back in 2-4 seconds.
 
 ### Intent Detection
 
@@ -148,7 +178,8 @@ The last 3 message exchanges are kept in `~/.cache/ai-shell/conversation.json` a
 ```json
 {
   "provider": "openai",
-  "model": "gpt-5-nano",
+  "model": "gpt-6-sol",
+  "reasoning_effort": "none",
   "features": {
     "funfact": true,
     "linus_quotes": true,
@@ -172,6 +203,13 @@ The last 3 message exchanges are kept in `~/.cache/ai-shell/conversation.json` a
 | ASCII Art | `features.ascii_art` | Random ASCII art footer |
 | Roast Mode | `features.roast` | Brutal commentary (also via `AI_ROAST=1`) |
 | Self-Improve | `features.self_improve` | Usage-based improvement suggestions |
+
+Other settings:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `reasoning_effort` | `none` | Reasoning for normal requests (`none`, `low`, `medium`, `high`); mapped to whatever the model supports |
+| `fix_reasoning_effort` | `low` | Reasoning used when diagnosing a failed command |
 
 Toggle at runtime:
 ```bash
@@ -205,17 +243,21 @@ ai config set features.ascii_art false
 
 ### Multi-Provider Support
 
-| Provider | Key Format | Default Model | Notes |
-|----------|-----------|---------------|-------|
-| OpenAI | `sk-...` | `gpt-5-nano` | $0.05/1M in — cheapest |
-| Google | `AI...` | `gemini-3-flash` | $0.50/1M in — latest gen |
-| Anthropic | `sk-ant-...` | `claude-haiku-4-5` | $1.00/1M in — fast |
+| Provider | Key Format | Default Model | Price per 1M tokens (in/out) |
+|----------|-----------|---------------|------------------------------|
+| OpenAI | `sk-...` | `gpt-6-sol` | $2.00 / $10.00 |
+| Anthropic | `sk-ant-...` | `claude-sonnet-5-5` | $2.00 / $10.00 |
+| Google | `AI...` | `gemini-flash-latest` | alias for Google's newest Flash |
 
-See all available models with `ai model`. Switch at runtime:
+A typical request is about 2K tokens in and 200 out, so the defaults cost under a cent per
+query. Cheaper picks: `gpt-6-luna` ($0.10 / $0.50, about 20x cheaper and nearly as fast),
+`claude-haiku-4-5` ($1 / $5), `gemini-flash-lite-latest`.
+
+`ai model` shows the recommended models; `ai models` lists everything your key can use. Switch at runtime:
 ```
-ai model openai              # shows models, switches to default
-ai model openai gpt-5-mini   # switch to specific model
-ai model google gemini-2.5-flash-lite  # ultra-cheap Google option
+ai model openai                # shows models, switches to default
+ai model openai gpt-6-luna     # switch to specific model
+ai model anthropic claude-haiku-4-5
 ```
 
 ## Project Structure

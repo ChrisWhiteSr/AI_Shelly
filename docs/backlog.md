@@ -79,22 +79,53 @@ Provider auto-detected from API key format during install. Per-provider API keys
 
 Full native PowerShell version of AI Shelly — no bash, no WSL, no jq, no curl required. Uses `Invoke-RestMethod`, `ConvertFrom-Json`, and `Get-CimInstance` for a zero-dependency Windows experience. System context detects Windows-specific info (CPU, RAM, GPU via CIM, package managers like winget/choco/scoop). AI generates PowerShell commands (e.g., `Get-ChildItem`) instead of bash commands.
 
-## Low Severity — Open
+## Speed & Smarts Overhaul — IMPLEMENTED (2026-10)
 
-### 4. `ask` function strips quotes too aggressively
-**File:** `ai-shell.sh`
+### ~~19. Reasoning control + 2026 models~~
+**Files:** `ai-shell.sh`, `ai-shell.ps1`, `install.sh`, `install.ps1`
 
-`tr -d "'\`"` removes all single quotes and backticks from input, which could break intended command patterns like `find . -name '*.txt'`. Should only strip characters that would break JSON encoding, not valid shell syntax.
+Benchmarked against the OpenAI API: the old default (`gpt-5-nano`, default reasoning) took
+~71s on a simple request and spent all 4,096 tokens reasoning, returning nothing. With
+`reasoning_effort: "none"`, `gpt-6-sol` and `gpt-6-luna` answer in 2-4s. Defaults are now
+`gpt-6-sol` / `claude-sonnet-5-5` / `gemini-flash-latest`, reasoning is off by default,
+`low` for self-correction, `medium` via `ai -t`. JSON output mode on OpenAI and Gemini.
+`ai models` lists models live from the provider.
 
-### 5. Retry logic shows empty command on malformed response
-**File:** `ai-shell.sh`
+### ~~20. Smarter context and safer execution~~
+- Previous shell command + exit code in context ("ai why did that fail")
+- Directory listing, git branch, date, and installed CLI tools in context
+- Per-option `risk` tag; destructive commands need `yes`
+- Live command output (no more waiting for capture); `cd`/`export`/`source` now affect your shell
+- Self-correction reuses the conversation and reasons a little before fixing
 
-If the retry API response is malformed, the user gets a "Run corrected command?" prompt with nothing to run. Should check for empty `retry_cmd` before prompting.
+### ~~21. Disabled features were treated as enabled~~
+`_ai_load_config` used `jq '.x // empty'`, which treats `false` as missing, so
+`features.roast: false` fell back to the default `true`. Fixed.
 
-### 6. Memory search is O(n*m)
-**File:** `ai-shell.sh`
+## Low Severity — FIXED
 
-Iterates every keyword against every memory line. Will get slow with large history files. Could use `grep -E` with combined patterns for better performance.
+### ~~4. `ask` function strips quotes too aggressively~~
+Now splits on whitespace without globbing or stripping characters.
+
+### ~~5. Retry logic shows empty command on malformed response~~
+Retry only prompts when a corrected command exists; otherwise shows the diagnosis.
+
+### ~~6. Memory search is O(n*m)~~
+Single `jq` pass with stopword filtering: 0.84s → 0.02s on 43 entries.
+
+## Open
+
+### 22. Google path not live-tested
+OpenAI and Anthropic were tested end to end (2026-10-06): Sonnet 5.5 accepts
+`between_tools` + effort, Opus 5.5 accepts effort `low`, Haiku 4.5 runs without params, and a
+rejected effort value falls back to a plain request. The Gemini `thinkingConfig` settings
+follow the docs and fall back if rejected, but haven't been run against the API.
+
+### 23. zsh compatibility
+The installer hooks `.zshrc`, but `read -p`, 0-indexed arrays and `fc` usage are bash-only.
+
+### 24. PowerShell 5.1 escape codes
+`` `e `` (used to clear the "Thinking..." line) only exists in PowerShell 7+.
 
 ## Future Enhancements — Planned
 

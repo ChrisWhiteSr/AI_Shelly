@@ -11,3 +11,6 @@
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Local env files with API keys
+.env*

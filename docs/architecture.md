@@ -77,7 +77,8 @@ Both share the same config format (`config.json`) and file structure.
 ```json
 {
     "provider": "openai",
-    "model": "gpt-5-nano",
+    "model": "gpt-6-sol",
+    "reasoning_effort": "none",
     "features": {
         "funfact": true,
         "linus_quotes": true,
@@ -107,9 +108,22 @@ Supports three providers with a unified interface:
 
 | Provider | API Endpoint | Key Format | Default Model |
 |----------|-------------|-----------|---------------|
-| OpenAI | `api.openai.com/v1/chat/completions` | `sk-...` | `gpt-5-nano` |
-| Google | `generativelanguage.googleapis.com/v1beta` | `AI...` | `gemini-3-flash` |
-| Anthropic | `api.anthropic.com/v1/messages` | `sk-ant-...` | `claude-haiku-4-5-20251001` |
+| OpenAI | `api.openai.com/v1/chat/completions` | `sk-...` | `gpt-6-sol` |
+| Google | `generativelanguage.googleapis.com/v1beta` | `AI...` | `gemini-flash-latest` |
+| Anthropic | `api.anthropic.com/v1/messages` | `sk-ant-...` | `claude-sonnet-5-5` |
+
+**Reasoning control.** The script uses three effort levels: `none` for normal requests,
+`low` for self-correction, `medium` for `ai -t`. Each provider maps them:
+
+| Provider | `none` becomes | Notes |
+|----------|----------------|-------|
+| OpenAI | `reasoning_effort: "none"` | `minimal` on original GPT-5 models, `low` on always-reasoning models (gpt-6.1, gpt-6-astra, o-series); omitted for non-reasoning models. If the API rejects a level, the call retries with the lowest level the error says is supported. |
+| Anthropic | Sonnet 5.5: `thinking: {type: "between_tools"}` + `effort: "low"` | Haiku 4.5 and older: no thinking params. Opus 5.5 / Fable can't disable thinking, so `effort: "low"`. Retries without the params if rejected. |
+| Google | `thinkingLevel: "minimal"` (Gemini 3+), `thinkingBudget: 0` (2.5 Flash) | Retries without `thinkingConfig` if rejected. |
+
+All three requests ask for JSON output (`response_format`, `responseMimeType`); Anthropic
+relies on the prompt plus a tolerant parser. API keys are passed to curl through a
+process-substitution header file, so they don't show up in `ps`.
 
 Provider is auto-detected from API key format during installation. Users can store per-provider keys:
 - `~/.config/ai-shell/api-key` — default key
@@ -118,7 +132,8 @@ Provider is auto-detected from API key format during installation. Users can sto
 **Hot-swap at runtime:**
 ```
 ai model openai                              # switch provider + default model
-ai model anthropic claude-sonnet-4-20250514  # specific model
+ai model anthropic claude-haiku-4-5          # specific model
+ai models                                    # live list from the provider
 ```
 
 ### 3. Intent Detection
@@ -244,25 +259,23 @@ The AI responds with structured JSON:
 
 ## Cost Estimate
 
-Using the lowest-cost model per provider:
-
 | Provider | Model | Input Cost | Output Cost | ~Cost/Query |
 |----------|-------|-----------|------------|------------|
-| OpenAI | GPT-5-nano | $0.05/1M | $0.005/1M | ~$0.00003 |
-| Google | Gemini 3 Flash | $0.50/1M | $3.00/1M | ~$0.0009 |
-| Anthropic | Haiku 4.5 | $1.00/1M | $5.00/1M | ~$0.002 |
+| OpenAI | gpt-6-sol (default) | $2.00/1M | $10.00/1M | ~$0.006 |
+| OpenAI | gpt-6-luna | $0.10/1M | $0.50/1M | ~$0.0003 |
+| Anthropic | Sonnet 5.5 (default) | $2.00/1M | $10.00/1M | ~$0.006 |
+| Anthropic | Haiku 4.5 | $1.00/1M | $5.00/1M | ~$0.003 |
 
-Typical query: ~500 tokens in, ~200 tokens out.
-1,000 queries/month ≈ **$0.03–$2.00/month** depending on provider.
-
----
+Typical query: ~2,000 tokens in (system context + memory), ~200 tokens out.
+1,000 queries/month ≈ **$0.30–$6/month** depending on model.
 
 ## Security
 
 - API keys stored with restricted permissions (`chmod 600` on Linux/macOS)
 - Commands always shown to user before execution — explicit confirmation required
+- Each option carries a `risk` tag; `danger` (or a local regex match for rm -rf, mkfs, dd to a device, force-push, ...) requires typing `yes`
 - `eval` / `Invoke-Expression` is the main risk — mitigated by user confirmation
-- Only system metadata and user queries are sent to the API — never file contents
+- Sent to the API: system metadata, the current directory and its first 40 entry names, git branch, the previous shell command and its exit code, piped input, and recent memory. File contents are never read.
 - Conversation buffer stores AI responses locally, never sent to third parties
 
 ---
